@@ -89,6 +89,29 @@ function Test-MigrationWebPassword {
     return ($passwordMatches -and $usernameMatches)
 }
 
+function Test-MigrationWebWindowsGroupMembership {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Security.Principal.WindowsIdentity] $Identity,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Group
+    )
+
+    if (-not $Identity.IsAuthenticated) { return $false }
+    try {
+        $groupSid = if ($Group -match '^S-1-') {
+            [System.Security.Principal.SecurityIdentifier]::new($Group)
+        }
+        else {
+            ([System.Security.Principal.NTAccount]::new($Group)).Translate([System.Security.Principal.SecurityIdentifier])
+        }
+        $principal = [System.Security.Principal.WindowsPrincipal]::new($Identity)
+        return $principal.IsInRole($groupSid)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Resolve-MigrationWebStoragePaths {
     [CmdletBinding()]
     param(
@@ -121,4 +144,4 @@ function Resolve-MigrationWebStoragePaths {
     }
 }
 
-Export-ModuleMember -Function New-MigrationWebPasswordRecord, Test-MigrationWebPassword, Resolve-MigrationWebStoragePaths
+Export-ModuleMember -Function New-MigrationWebPasswordRecord, Test-MigrationWebPassword, Test-MigrationWebWindowsGroupMembership, Resolve-MigrationWebStoragePaths

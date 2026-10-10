@@ -5,6 +5,8 @@ param(
     [Parameter()][string] $ConfigPath = (Join-Path $PSScriptRoot 'config\migration.config.json'),
     [Parameter()][string] $StatePath = (Join-Path $PSScriptRoot 'MigrationState.json'),
     [Parameter()][switch] $PortableMode,
+    [Parameter()][ValidateSet('Application', 'Windows')][string] $AuthenticationMode = 'Application',
+    [Parameter()][string] $WindowsAuthGroup,
     [Parameter()][string] $AppRoot = $PSScriptRoot
 )
 
@@ -14,12 +16,22 @@ $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion -lt [Version]'7.2') {
     throw 'PowerShell 7.2 or later is required.'
 }
+if ($AuthenticationMode -eq 'Windows') {
+    if ($PortableMode) {
+        throw 'Windows Integrated Authentication requires HTTPS server mode; it is not supported in portable HTTP mode.'
+    }
+    if ([string]::IsNullOrWhiteSpace($WindowsAuthGroup)) {
+        throw "Windows authentication requires -WindowsAuthGroup 'DOMAIN\GroupName'."
+    }
+}
 Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.WebAuth.psm1') -Force
 $storage = Resolve-MigrationWebStoragePaths -AppRoot $AppRoot -PortableMode:$PortableMode
 $fullConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
 $fullAuthPath = $storage.AuthPath
 $fullStatePath = [System.IO.Path]::GetFullPath($StatePath)
-foreach ($path in @($fullConfigPath, $fullAuthPath)) {
+$requiredPaths = @($fullConfigPath)
+if ($AuthenticationMode -eq 'Application') { $requiredPaths += $fullAuthPath }
+foreach ($path in $requiredPaths) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required file not found: $path"
     }
@@ -27,13 +39,19 @@ foreach ($path in @($fullConfigPath, $fullAuthPath)) {
 
 Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.Core.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.Discovery.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.Patching.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.WebAuth.psm1') -Force
 Import-Module dbatools -ErrorAction Stop
 $script:WebConfiguration = Import-MigrationConfiguration -Path $fullConfigPath
-$script:AuthRecord = Get-Content -LiteralPath $fullAuthPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
-foreach ($property in @('Salt', 'PasswordHash', 'Iterations', 'Username')) {
-    if (-not $script:AuthRecord.Contains($property)) {
-        throw "Authentication record is missing '$property'. Re-run Initialize-DbMigrationWebAuth.ps1."
+$script:AuthenticationMode = $AuthenticationMode
+$script:WindowsAuthGroup = $WindowsAuthGroup
+$script:AuthRecord = $null
+if ($script:AuthenticationMode -eq 'Application') {
+    $script:AuthRecord = Get-Content -LiteralPath $fullAuthPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
+    foreach ($property in @('Salt', 'PasswordHash', 'Iterations', 'Username')) {
+        if (-not $script:AuthRecord.Contains($property)) {
+            throw "Authentication record is missing '$property'. Re-run Initialize-DbMigrationWebAuth.ps1."
+        }
     }
 }
 
@@ -112,6 +130,9 @@ $script:PortableMode = [bool]$PortableMode
 $script:UseSecureTransport = -not $script:PortableMode
 $script:Origin = if ($script:PortableMode) { "http://$($script:HostName):$Port" } elseif ($Port -eq 443) { "https://$($script:HostName)" } else { "https://$($script:HostName):$Port" }
 $script:Listener = [System.Net.HttpListener]::new()
+if ($script:AuthenticationMode -eq 'Windows') {
+    $script:Listener.AuthenticationSchemes = [System.Net.AuthenticationSchemes]::Negotiate
+}
 $script:Listener.Prefixes.Add("$($script:Origin)/")
 $script:Sessions = @{}
 $script:LoginAttempts = @{}
@@ -254,6 +275,19 @@ function Read-WebRequestJson {
 
 function Get-WebSession {
     param([Parameter(Mandatory)][System.Net.HttpListenerRequest] $Request)
+    if ($script:AuthenticationMode -eq 'Windows') {
+        $windowsIdentity = $Request.User.Identity -as [System.Security.Principal.WindowsIdentity]
+        if (-not $windowsIdentity -or -not $windowsIdentity.IsAuthenticated) { return $null }
+        if (-not (Test-MigrationWebWindowsGroupMembership -Identity $windowsIdentity -Group $script:WindowsAuthGroup)) {
+            return $null
+        }
+        return @{
+            Username = $windowsIdentity.Name
+            ExpiresUtc = [DateTime]::MaxValue
+            IsWindowsAuthenticated = $true
+        }
+    }
+
     $cookie = $Request.Cookies['DbMigrationSession']
     if (-not $cookie -or -not $script:Sessions.ContainsKey($cookie.Value)) {
         return $null
@@ -681,25 +715,34 @@ function ConvertTo-WebPatchTargets {
     $targets = [System.Collections.Generic.List[object]]::new()
     $selectedInstances = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($selection in $Selections) {
-        if ($selection -isnot [System.Collections.IDictionary] -or
-            -not $selection.Contains('PairIndex') -or -not $selection.Contains('Role')) {
-            throw [ArgumentException]::new('Each target selection must include PairIndex and Role.')
-        }
-        if ($selection.PairIndex -is [bool] -or $selection.PairIndex -isnot [byte] -and
-            $selection.PairIndex -isnot [int16] -and $selection.PairIndex -isnot [int32] -and
-            $selection.PairIndex -isnot [int64]) {
-            throw [ArgumentException]::new('PairIndex must be an integer.')
+        if ($selection -isnot [System.Collections.IDictionary] -or -not $selection.Contains('Role')) {
+            throw [ArgumentException]::new('Each target selection must include a Role and either SqlInstance or PairIndex.')
         }
         $role = [string]$selection.Role
-        if ($role -notin @('Source', 'Target')) {
-            throw [ArgumentException]::new("Role must be 'Source' or 'Target'.")
+        if ($role -eq 'Standalone' -and $selection.Contains('SqlInstance')) {
+            $sqlInstance = ([string]$selection.SqlInstance).Trim()
+            $pairIndex = -1
         }
-        $pair = Get-WebPair -Index ([int]$selection.PairIndex)
-        $sqlInstance = [string]$pair[$role]
+        else {
+            if (-not $selection.Contains('PairIndex') -or $selection.PairIndex -is [bool] -or
+                $selection.PairIndex -isnot [byte] -and $selection.PairIndex -isnot [int16] -and
+                $selection.PairIndex -isnot [int32] -and $selection.PairIndex -isnot [int64]) {
+                throw [ArgumentException]::new('PairIndex must be an integer for source/target selections.')
+            }
+            if ($role -notin @('Source', 'Target')) {
+                throw [ArgumentException]::new("Role must be 'Source', 'Target', or a standalone SqlInstance.")
+            }
+            $pairIndex = [int]$selection.PairIndex
+            $pair = Get-WebPair -Index $pairIndex
+            $sqlInstance = [string]$pair[$role]
+        }
+        if ([string]::IsNullOrWhiteSpace($sqlInstance)) {
+            throw [ArgumentException]::new('A non-empty SQL instance is required for every patch target.')
+        }
         if (-not $selectedInstances.Add($sqlInstance)) {
             throw [ArgumentException]::new("SQL instance '$sqlInstance' was selected more than once.")
         }
-        $targets.Add(@{ SqlInstance = $sqlInstance; Role = $role; PairIndex = [int]$selection.PairIndex })
+        $targets.Add(@{ SqlInstance = $sqlInstance; Role = $role; PairIndex = $pairIndex })
     }
     $targets.ToArray()
 }
@@ -828,13 +871,6 @@ try {
                 Send-WebJson -Response $response -StatusCode 400 -Value @{ error = 'Invalid host header.' }
                 continue
             }
-
-            if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -in @('/', '/index.html')) {
-                $indexPath = Join-Path $PSScriptRoot 'web\index.html'
-                $bytes = [System.IO.File]::ReadAllBytes($indexPath)
-                Send-WebResponse -Response $response -StatusCode 200 -ContentType 'text/html; charset=utf-8' -Body $bytes
-                continue
-            }
             if (-not $script:UseSecureTransport -and -not $request.IsSecureConnection) {
                 $localAddress = [string]$request.LocalEndPoint.Address
                 $requestIsAllowed = $request.Url.Scheme -eq 'http' -and (
@@ -852,11 +888,35 @@ try {
                 Send-WebJson -Response $response -StatusCode 400 -Value @{ error = 'HTTPS is required.' }
                 continue
             }
+            $windowsSession = $null
+            if ($script:AuthenticationMode -eq 'Windows') {
+                $windowsSession = Get-WebSession -Request $request
+                if (-not $windowsSession) {
+                    $identity = $request.User.Identity
+                    $isAuthenticated = $identity -and $identity.IsAuthenticated
+                    $statusCode = if ($isAuthenticated) { 403 } else { 401 }
+                    $message = if ($isAuthenticated) {
+                        "Windows account '$($identity.Name)' is not a member of the required AD group '$($script:WindowsAuthGroup)'."
+                    }
+                    else {
+                        'Windows Integrated Authentication is required.'
+                    }
+                    Send-WebJson -Response $response -StatusCode $statusCode -Value @{ error = $message; authMode = 'Windows' }
+                    continue
+                }
+            }
+            if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -in @('/', '/index.html')) {
+                $indexPath = Join-Path $PSScriptRoot 'web\index.html'
+                $bytes = [System.IO.File]::ReadAllBytes($indexPath)
+                Send-WebResponse -Response $response -StatusCode 200 -ContentType 'text/html; charset=utf-8' -Body $bytes
+                continue
+            }
             if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/session') {
-                $session = Get-WebSession -Request $request
+                $session = if ($script:AuthenticationMode -eq 'Windows') { $windowsSession } else { Get-WebSession -Request $request }
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
                     authenticated = [bool]$session
                     username = if ($session) { $session.Username } else { '' }
+                    authMode = $script:AuthenticationMode
                 }
                 continue
             }
@@ -865,6 +925,10 @@ try {
                 continue
             }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/login') {
+                if ($script:AuthenticationMode -eq 'Windows') {
+                    Send-WebJson -Response $response -StatusCode 409 -Value @{ error = 'Application-password login is disabled while Windows authentication is active.'; authMode = 'Windows' }
+                    continue
+                }
                 $address = [string]$request.RemoteEndPoint.Address
                 $attempts = @($script:LoginAttempts[$address] | Where-Object { $_ -gt [DateTime]::UtcNow.AddMinutes(-10) })
                 if ($attempts.Count -ge 5) {
@@ -899,12 +963,20 @@ try {
                 continue
             }
 
-            $session = Get-WebSession -Request $request
+            $session = if ($script:AuthenticationMode -eq 'Windows') { $windowsSession } else { Get-WebSession -Request $request }
             if (-not $session) {
                 Send-WebJson -Response $response -StatusCode 401 -Value @{ error = 'Authentication required.' }
                 continue
             }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/logout') {
+                if ($script:AuthenticationMode -eq 'Windows') {
+                    Send-WebJson -Response $response -StatusCode 200 -Value @{
+                        authenticated = $true
+                        username = $session.Username
+                        authMode = 'Windows'
+                    }
+                    continue
+                }
                 $cookie = $request.Cookies['DbMigrationSession']
                 if ($cookie) { $script:Sessions.Remove($cookie.Value) }
                 Set-WebSessionCookie -Response $response
@@ -912,24 +984,9 @@ try {
                 continue
             }
             if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/defaults') {
-                $pairs = [System.Collections.Generic.List[object]]::new()
-                $endpointKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-                foreach ($configuredPair in $script:WebConfiguration.SourceTargets) {
-                    $endpointKey = [string]::Join([char]0, @(
-                        ([string]$configuredPair.Source).Trim().ToLowerInvariant(),
-                        ([string]$configuredPair.Target).Trim().ToLowerInvariant()
-                    ))
-                    if ($endpointKeys.Add($endpointKey)) {
-                        $pairs.Add(@{
-                            Source = [string]$configuredPair.Source
-                            Target = [string]$configuredPair.Target
-                            BackupPath = [string]$configuredPair.BackupPath
-                        })
-                    }
-                    if ($pairs.Count -ge 3) { break }
-                }
+                $pairs = @(Get-MigrationSourceTargetPairDefaults -SourceTargets @($script:WebConfiguration.SourceTargets) -MaxPairs 3)
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
-                    pairs = $pairs.ToArray()
+                    pairs = $pairs
                     maxPairs = 3
                     options = @{
                         MigrateLogins = [bool]$script:WebConfiguration.MigrateLogins
@@ -942,19 +999,70 @@ try {
                 }
                 continue
             }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/validate-pair') {
+                $body = Read-WebRequestJson -Request $request
+                if (-not $body.Contains('Pair')) {
+                    throw [ArgumentException]::new('Pair is required.')
+                }
+                if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
+                    ($script:PatchProcess -and -not $script:PatchProcess.HasExited)) {
+                    throw [System.InvalidOperationException]::new('Pair validation is unavailable while migration or patching is running.')
+                }
+                $pair = @(ConvertTo-WebPairs -Pairs @($body.Pair))[0]
+                $validationConfiguration = $script:WebConfiguration.Clone()
+                $validationConfiguration.SourceTargets = @($pair)
+                $validation = @(Test-MigrationConfiguration -Configuration $validationConfiguration)
+                Send-WebJson -Response $response -StatusCode 200 -Value @{
+                    source = $pair.Source
+                    target = $pair.Target
+                    backupPath = $pair.BackupPath
+                    validation = $validation
+                    passedCount = @($validation | Where-Object Status -eq 'Passed').Count
+                    failedCount = @($validation | Where-Object Status -eq 'Failed').Count
+                    skippedCount = @($validation | Where-Object Status -eq 'Skipped').Count
+                    validatedAt = [DateTime]::UtcNow.ToString('o')
+                }
+                continue
+            }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/patch/catalog') {
                 if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
                     ($script:PatchProcess -and -not $script:PatchProcess.HasExited)) {
                     throw [System.InvalidOperationException]::new('Patch catalog refresh is unavailable while a migration or patch operation is running.')
                 }
                 $body = Read-WebRequestJson -Request $request
-                if (-not $body.Contains('Refresh') -or $body.Refresh -isnot [bool]) {
-                    throw [ArgumentException]::new('Refresh must be provided as a JSON boolean.')
+                if (-not $body.Contains('Refresh') -or $body.Refresh -isnot [bool] -or
+                    -not $body.Contains('Targets') -or $body.Targets -isnot [array]) {
+                    $received = ($body.Keys | ForEach-Object { "$_=$(if ($null -eq $body[$_]) { 'null' } else { $body[$_].GetType().Name })" }) -join ', '
+                    throw [ArgumentException]::new("Refresh and Targets must be provided; Refresh must be a JSON boolean and Targets an array. Received: $received. Reload the page (Ctrl+F5) if this persists.")
                 }
+                $targets = @(ConvertTo-WebPatchTargets -Selections @($body.Targets))
                 $script:PatchCatalog = @(Get-MigrationSqlServerPatchCatalog -Refresh:$body.Refresh)
                 $script:PatchCatalogUpdatedAt = [DateTime]::UtcNow.ToString('o')
+                $serverBuilds = [System.Collections.Generic.List[object]]::new()
+                foreach ($target in $targets) {
+                    $productVersion = [string](Invoke-DbaQuery -SqlInstance $target.SqlInstance -Database master -EnableException -ErrorAction Stop `
+                        -Query "SELECT CONVERT(nvarchar(50), SERVERPROPERTY('ProductVersion')) AS ProductVersion" |
+                        Select-Object -First 1).ProductVersion
+                    $build = @(Get-DbaBuild -Build $productVersion -EnableException -ErrorAction Stop |
+                        Select-Object -First 1)
+                    if (-not $build) {
+                        throw "Could not determine SQL Server build for '$($target.SqlInstance)'."
+                    }
+                    $serverBuilds.Add(@{
+                        SqlInstance = $target.SqlInstance
+                        Role = $target.Role
+                        PairIndex = $target.PairIndex
+                        MajorVersion = [string]$build[0].NameLevel
+                        ServicePack = [string]$build[0].SPLevel
+                        BuildLevel = [string]$build[0].BuildLevel
+                        CurrentPatch = [string]$build[0].CULevel
+                    })
+                }
+                $relevantCatalog = @(Get-MigrationRelevantPatchCatalog -Catalog $script:PatchCatalog -ServerBuilds $serverBuilds.ToArray())
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
-                    patches = $script:PatchCatalog
+                    patches = $relevantCatalog
+                    catalogCount = $script:PatchCatalog.Count
+                    targets = $serverBuilds.ToArray()
                     updatedAt = $script:PatchCatalogUpdatedAt
                     onlineRefresh = [bool]$body.Refresh
                 }
@@ -985,6 +1093,30 @@ try {
                     alreadyInstalledCount = @($results | Where-Object Status -eq 'AlreadyInstalled').Count
                     blockedCount = @($results | Where-Object Status -ne 'Eligible' -and Status -ne 'AlreadyInstalled').Count
                     assessedAt = [DateTime]::UtcNow.ToString('o')
+                }
+                continue
+            }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/discover-instance') {
+                if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
+                    ($script:PatchProcess -and -not $script:PatchProcess.HasExited)) {
+                    throw [System.InvalidOperationException]::new('Individual SQL discovery is unavailable while a migration or patch is running.')
+                }
+                $body = Read-WebRequestJson -Request $request
+                if (-not $body.Contains('SqlInstance') -or [string]::IsNullOrWhiteSpace([string]$body.SqlInstance)) {
+                    throw [ArgumentException]::new('SqlInstance is required.')
+                }
+                $sqlInstance = ([string]$body.SqlInstance).Trim()
+                $connection = Connect-DbaInstance -SqlInstance $sqlInstance -ErrorAction Stop
+                $databases = @(Get-MigrationDatabase -SqlInstance $sqlInstance -Configuration $script:WebConfiguration |
+                    Select-Object Name, SizeMB, Compatibility, Status, RecoveryModel)
+                Send-WebJson -Response $response -StatusCode 200 -Value @{
+                    sqlInstance = [string]$connection.SqlInstance
+                    computerName = [string]$connection.ComputerName
+                    instanceName = [string]$connection.InstanceName
+                    version = [string]$connection.VersionString
+                    versionMajor = [int]$connection.VersionMajor
+                    databases = $databases
+                    discoveredAt = [DateTime]::UtcNow.ToString('o')
                 }
                 continue
             }
@@ -1029,16 +1161,26 @@ try {
                     throw [System.InvalidOperationException]::new('Custom SQL execution is unavailable while SQL Server patching is running.')
                 }
                 $body = Read-WebRequestJson -Request $request
-                if (-not $body.Contains('PairIndex') -or -not $body.Contains('ServerRole') -or -not $body.Contains('Query')) {
-                    throw [ArgumentException]::new('PairIndex, ServerRole, and Query are required.')
+                if (-not $body.Contains('Query')) {
+                    throw [ArgumentException]::new('Query is required.')
                 }
-                $pairIndex = [int]$body.PairIndex
-                $pair = Get-WebPair -Index $pairIndex
-                $role = [string]$body.ServerRole
-                if ($role -notin @('Source', 'Target')) {
-                    throw [ArgumentException]::new("ServerRole must be 'Source' or 'Target'.")
+                $pairIndex = $null
+                if ($body.Contains('SqlInstance') -and -not [string]::IsNullOrWhiteSpace([string]$body.SqlInstance)) {
+                    $sqlInstance = ([string]$body.SqlInstance).Trim()
+                    $role = 'Standalone'
                 }
-                $sqlInstance = if ($role -eq 'Source') { [string]$pair.Source } else { [string]$pair.Target }
+                else {
+                    if (-not $body.Contains('PairIndex') -or -not $body.Contains('ServerRole')) {
+                        throw [ArgumentException]::new('Provide either SqlInstance or both PairIndex and ServerRole.')
+                    }
+                    $pairIndex = [int]$body.PairIndex
+                    $pair = Get-WebPair -Index $pairIndex
+                    $role = [string]$body.ServerRole
+                    if ($role -notin @('Source', 'Target')) {
+                        throw [ArgumentException]::new("ServerRole must be 'Source' or 'Target'.")
+                    }
+                    $sqlInstance = if ($role -eq 'Source') { [string]$pair.Source } else { [string]$pair.Target }
+                }
                 $database = if ($body.Contains('Database') -and -not [string]::IsNullOrWhiteSpace([string]$body.Database)) {
                     [string]$body.Database
                 }

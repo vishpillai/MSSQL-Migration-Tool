@@ -44,9 +44,17 @@ if (-not $CurrentUser) {
     }
 }
 
+$prerequisiteScope = if ($CurrentUser) { 'CurrentUser' } else { 'AllUsers' }
+$prerequisiteScript = Join-Path $PSScriptRoot 'Install-DbMigrationPrerequisites.ps1'
+if (-not (Test-Path -LiteralPath $prerequisiteScript -PathType Leaf)) {
+    throw 'Install-DbMigrationPrerequisites.ps1 is missing from the application source.'
+}
+& $prerequisiteScript -Scope $prerequisiteScope | Out-Null
+
 $requiredFiles = @(
     'Start-PortableDbMigrationWeb.ps1',
     'Invoke-DbMigrationWeb.ps1',
+    'Install-DbMigrationPrerequisites.ps1',
     'web\index.html',
     'config\migration.config.json'
 )
@@ -60,7 +68,7 @@ foreach ($relativePath in $requiredFiles) {
 
 $null = New-Item -ItemType Directory -Path $resolvedInstallPath -Force -ErrorAction Stop
 
-$excludedNames = @('.git', '.vscode', 'installer', 'bin', 'obj')
+$excludedNames = @('.git', '.vscode', 'installer', 'portable', 'bin', 'obj', 'Setup-DbMigrationTool.cmd', 'Setup-DbMigrationTool.ps1')
 Get-ChildItem -LiteralPath $sourceRoot -Force | Where-Object {
     $_.Name -notin $excludedNames
 } | ForEach-Object {

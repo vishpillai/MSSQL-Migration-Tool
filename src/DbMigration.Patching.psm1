@@ -93,6 +93,34 @@ function Get-MigrationSqlServerPatchCatalog {
     @($catalog.Values | Sort-Object -Property @{ Expression = 'ReleaseDate'; Descending = $true }, 'Product', 'Build')
 }
 
+function Get-MigrationRelevantPatchCatalog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]] $Catalog,
+        [Parameter(Mandatory)][object[]] $ServerBuilds
+    )
+
+    if ($ServerBuilds.Count -eq 0) { return @() }
+    $relevantPatches = foreach ($patch in $Catalog) {
+        $isRelevant = $false
+        foreach ($serverBuild in $ServerBuilds) {
+            if ([string]$patch.MajorVersion -ne [string]$serverBuild.MajorVersion) { continue }
+            if ([string]$patch.ServicePack -eq [string]$serverBuild.ServicePack) {
+                $isRelevant = $true
+                break
+            }
+            if ([string]$patch.UpdateLevel -eq 'Service Pack' -and
+                [version]$patch.BuildLevel -gt [version]$serverBuild.BuildLevel) {
+                $isRelevant = $true
+                break
+            }
+        }
+        if ($isRelevant) { $patch }
+    }
+
+    @($relevantPatches | Sort-Object -Property @{ Expression = 'ReleaseDate'; Descending = $true }, Product, BuildLevel -Unique)
+}
+
 function Get-MigrationSqlServerPatchByKB {
     [CmdletBinding()]
     param([Parameter(Mandatory)][ValidatePattern('^\d{5,10}$')][string] $KB)
@@ -273,4 +301,4 @@ function Invoke-MigrationSqlServerPatchInternal {
     }
 }
 
-Export-ModuleMember -Function Get-MigrationSqlServerPatchCatalog, Get-MigrationSqlServerPatchByKB, Get-MigrationSqlServerPatchAssessment, Save-MigrationSqlServerPatch, Invoke-MigrationSqlServerPatch
+Export-ModuleMember -Function Get-MigrationSqlServerPatchCatalog, Get-MigrationRelevantPatchCatalog, Get-MigrationSqlServerPatchByKB, Get-MigrationSqlServerPatchAssessment, Save-MigrationSqlServerPatch, Invoke-MigrationSqlServerPatch

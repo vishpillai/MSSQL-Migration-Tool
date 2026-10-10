@@ -204,14 +204,22 @@ function Test-MigrationConfiguration {
 
     foreach ($pair in $Configuration.SourceTargets) {
         $migrationMode = if ($pair.Contains('MigrationMode')) { [string]$pair.MigrationMode } else { 'Full' }
+        $sourceMajor = $null
         foreach ($endpoint in @(
-            @{ Role = 'Source'; Name = $pair.Source; AllowedVersions = @(11, 13, 15) },
-            @{ Role = 'Target'; Name = $pair.Target; AllowedVersions = @(16) }
+            @{ Role = 'Source'; Name = $pair.Source },
+            @{ Role = 'Target'; Name = $pair.Target }
         )) {
             try {
                 $instance = Connect-DbaInstance -SqlInstance $endpoint.Name -ErrorAction Stop
                 $majorVersion = [int]$instance.VersionMajor
-                $expectedVersions = $endpoint.AllowedVersions -join ', '
+                # Supported: SQL Server 2012 (11) through 2025 (17); target must be the same or newer than source.
+                $minimum = if ($endpoint.Role -eq 'Target' -and $sourceMajor) { $sourceMajor } else { 11 }
+                $endpoint.AllowedVersions = @($minimum..17)
+                if ($endpoint.Role -eq 'Source') { $sourceMajor = $majorVersion }
+                $expectedVersions = if ($endpoint.Role -eq 'Target' -and $sourceMajor) {
+                    "$minimum through 17 (same or newer than the source)"
+                }
+                else { '11 through 17' }
                 if ($majorVersion -notin $endpoint.AllowedVersions) {
                     [pscustomobject]@{
                         Source = $pair.Source

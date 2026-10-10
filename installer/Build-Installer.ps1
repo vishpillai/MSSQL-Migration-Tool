@@ -7,7 +7,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Path $PSScriptRoot -Parent
-$stagingRoot = Join-Path $PSScriptRoot 'staging'
+$stagingRoot = Join-Path $PSScriptRoot 'obj\staging'
 
 if (Test-Path -LiteralPath $stagingRoot) {
     Remove-Item -LiteralPath $stagingRoot -Recurse -Force
@@ -15,11 +15,14 @@ if (Test-Path -LiteralPath $stagingRoot) {
 $null = New-Item -ItemType Directory -Path $stagingRoot -Force -ErrorAction Stop
 
 Get-ChildItem -LiteralPath $repoRoot -Force | Where-Object {
-    $_.Name -notin @('.git', '.gitignore', '.vscode', 'installer')
+    $_.Name -notin @('.git', '.gitignore', '.vscode', 'installer', 'portable')
 } | ForEach-Object {
     $destination = Join-Path $stagingRoot $_.Name
     Copy-Item -Path $_.FullName -Destination $destination -Recurse -Force
 }
+
+$null = New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'portable\auth') -Force -ErrorAction Stop
+$null = New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'portable\logs') -Force -ErrorAction Stop
 
 $launcherPath = Join-Path $stagingRoot 'Start-DbMigrationWeb.cmd'
 @'

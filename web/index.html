@@ -44,6 +44,8 @@
     .patch-metric strong { display: block; font-size: 17px; }
     .patch-metric span { color: #52606d; font-size: 11px; }
     .patch-results td { vertical-align: top; }
+    .standalone-discovery { margin-top: 8px; }
+    .standalone-discovery table { max-height: 180px; }
     .patch-result-eligible { color: #167343; font-weight: 600; }
     .patch-result-alreadyinstalled, .patch-result-superseded, .patch-result-samebuild { color: #52606d; }
     .patch-result-unsupportedcluster, .patch-result-versionmismatch, .patch-result-servicepackmismatch, .patch-result-unknownbuild { color: #a52121; font-weight: 600; }
@@ -57,6 +59,9 @@
     th, td { padding: 6px 7px; border: 1px solid #d3d9df; text-align: left; }
     th { color: #4d5d69; font-weight: 600; }
     th { background: #edf0f2; }
+    .validation-passed { color: #167343; font-weight: 600; }
+    .validation-failed { color: #a52121; font-weight: 600; }
+    .validation-skipped { color: #52606d; }
     td.nowrap { white-space: nowrap; }
     .target-exists { color: #a45b00; font-weight: 600; }
     .status-line { display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; }
@@ -73,11 +78,40 @@
     #login-card { max-width: 420px; margin: 70px auto; }
     @media (max-width: 900px) { #application { grid-template-areas: "explorer" "editor" "monitor"; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; min-height: 0; } #application > section:first-child { max-height: none; } }
     @media (max-width: 620px) { header { padding: 8px 10px; } .header-context { display: none; } main { padding: 6px; } .card { padding: 10px; } h2 { margin: -10px -10px 9px; } }
+    /* Modern polish */
+    :root { background: #f1f4f8; --chrome: #1f4e79; --chrome-dark: #163a5c; --line: #d3dae3; --panel-title: #f6f8fb; --accent: #0f6cbd; }
+    header { position: sticky; top: 0; z-index: 10; background: linear-gradient(90deg, #163a5c, #1f6aa5); box-shadow: 0 2px 6px rgba(0,0,0,.18); }
+    header h1::before { content: "\26C1  "; opacity: .85; }
+    .card { border-radius: 8px; box-shadow: 0 1px 3px rgba(16,24,40,.08); }
+    h2 { border-radius: 8px 8px 0 0; letter-spacing: .2px; }
+    input[type="text"], input[type="password"], select, textarea { border-radius: 6px; transition: border-color .15s, box-shadow .15s; }
+    input:focus, select:focus, textarea:focus { outline: none; box-shadow: 0 0 0 3px rgba(15,108,189,.22); }
+    button { border-radius: 6px; transition: background .15s, transform .05s, box-shadow .15s; }
+    button:hover:not(:disabled) { background: #0b5a9e; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+    button.secondary:hover:not(:disabled) { background: #e2e7ec; }
+    button:active:not(:disabled) { transform: translateY(1px); }
+    .pair-card, .patch-panel, .patch-metric, .pill { border-radius: 8px; }
+    .patch-panel summary { border-radius: 8px 8px 0 0; }
+    .patch-metric { box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+    table { border-collapse: separate; border-spacing: 0; }
+    th { position: sticky; top: 0; z-index: 1; }
+    tbody tr:nth-child(even) td { background: #f8fafc; }
+    tbody tr:hover td { background: #eaf3fb; }
+    .validation-passed::before, .patch-result-eligible::before { content: "\2714 "; }
+    .validation-failed::before { content: "\2716 "; }
+    .progress { border-radius: 999px; } .progress > div { border-radius: 999px; }
+    #events { border-radius: 6px; }
+    .error:not(:empty) { padding: 8px 10px; background: #fdecec; border: 1px solid #f3b4b4; border-radius: 6px; }
+    #login-card { border-radius: 10px; box-shadow: 0 8px 24px rgba(16,24,40,.12); }
+    footer { background: #fff; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-thumb { background: #c1cad4; border-radius: 6px; }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
   </style>
 </head>
 <body>
   <header>
     <div class="brand"><h1>Database Migration</h1><span class="header-context">SQL Server management workspace</span></div>
+    <span id="current-user" class="header-context"></span>
     <button id="logout" class="secondary hidden">Sign out</button>
   </header>
   <main>
@@ -97,6 +131,7 @@
       <section class="card">
         <h2>Configure up to 3 source / target pairs</h2>
         <p class="muted">Pairs run one after another. Databases within each pair run sequentially; each database is validated, migrated, post-checked, and its temporary backup deleted before the next begins.</p>
+        <p class="muted">Enter a hostname, SQL instance (for example, HOST\INSTANCE), or IP address. Validate checks SQL connectivity/version and shared-drive access before discovery.</p>
         <label class="check"><input id="remember-settings" type="checkbox" checked> Remember source, target, and shared backup paths in this browser</label>
         <div id="pair-list"></div>
         <div class="row">
@@ -166,8 +201,15 @@
 
       <section class="card">
         <h2>Run custom T-SQL</h2>
-        <p class="muted">Execute a custom query against the selected source or target instance for the current pair. Choose master or a database found during discovery.</p>
-        <div class="row">
+        <p class="muted">Run against a migration pair endpoint or a single SQL Server without configuring a source/target pair.</p>
+        <div class="grow" style="margin-bottom:10px">
+          <label for="custom-scope">Target scope</label>
+          <select id="custom-scope">
+            <option value="Pair">Migration pair</option>
+            <option value="Standalone">Individual SQL instance</option>
+          </select>
+        </div>
+        <div id="custom-pair-controls" class="row">
           <div class="grow">
             <label for="custom-pair-index">Pair</label>
             <select id="custom-pair-index"></select>
@@ -179,6 +221,18 @@
               <option value="Target">Target</option>
             </select>
           </div>
+        </div>
+        <div id="custom-instance-controls" class="row hidden">
+          <div class="grow">
+            <label for="standalone-sql-instance">SQL hostname, instance, or IP</label>
+            <input id="standalone-sql-instance" type="text" placeholder="HOST\INSTANCE or 10.0.0.20,1433">
+          </div>
+          <button id="discover-standalone-instance" class="secondary" type="button">Validate and discover</button>
+        </div>
+        <div id="standalone-instance-status" class="muted" style="margin-top:8px" aria-live="polite"></div>
+        <div id="standalone-instance-error" class="error" role="alert"></div>
+        <div id="standalone-discovery-results" class="table-wrap standalone-discovery hidden"></div>
+        <div class="row" style="margin-top:10px">
           <div class="grow">
             <label for="custom-database">Database</label>
             <select id="custom-database"></select>
@@ -202,8 +256,13 @@
   <script>
     const $ = (id) => document.getElementById(id);
     let pairs = [];
+    let standaloneSqlInstance = "";
+    let standaloneInstanceInfo = null;
+    let standaloneDatabases = [];
     let patchCatalog = [];
+    let patchCatalogCount = 0;
     let patchCatalogUpdatedAt = null;
+    let patchServerBuilds = [];
     let patchAssessment = null;
     let patchAction = null;
     let patchKB = "";
@@ -212,6 +271,7 @@
     let eventCursor = 0;
     let migrationActive = false;
     let patchActive = false;
+    let validationActive = false;
     let controlAction = "Run";
     let controlPaused = false;
     let alertedFailure = false;
@@ -232,10 +292,12 @@
       return payload;
     }
 
-    function showApplication(authenticated) {
-      $("login-card").classList.toggle("hidden", authenticated);
+    function showApplication(authenticated, authMode = "Application", username = "") {
+      const windowsAuth = authMode === "Windows";
+      $("login-card").classList.toggle("hidden", authenticated || windowsAuth);
       $("application").classList.toggle("hidden", !authenticated);
-      $("logout").classList.toggle("hidden", !authenticated);
+      $("logout").classList.toggle("hidden", !authenticated || windowsAuth);
+      $("current-user").textContent = authenticated && username ? `Signed in as ${username}` : "";
       if (authenticated) initializePairs();
     }
 
@@ -272,13 +334,21 @@
         $("remember-settings").checked = saved?.remember === true;
         pairs = (saved?.remember && Array.isArray(saved.pairs) ? saved.pairs : result.pairs)
           .slice(0, result.maxPairs)
-          .map((item) => ({
-            Source: item.Source || "",
-            Target: item.Target || "",
-            BackupPath: item.BackupPath || "",
-            MigrationMode: item.MigrationMode === "SchemaOnly" ? "SchemaOnly" : "Full",
-            databases: null
-          }));
+          .map((item) => {
+            const configuredPair = (result.pairs || []).find((candidate) =>
+              String(candidate.Source).trim().toLowerCase() === String(item.Source).trim().toLowerCase() &&
+              String(candidate.Target).trim().toLowerCase() === String(item.Target).trim().toLowerCase());
+            const migrationMode = ["Full", "SchemaOnly"].includes(item.MigrationMode)
+              ? item.MigrationMode
+              : configuredPair?.MigrationMode === "SchemaOnly" ? "SchemaOnly" : "Full";
+            return {
+              Source: item.Source || "",
+              Target: item.Target || "",
+              BackupPath: item.BackupPath || "",
+              MigrationMode: migrationMode,
+              databases: null
+            };
+          });
         if (!pairs.length) pairs = [{ Source: "", Target: "", BackupPath: "", MigrationMode: "Full", databases: null }];
         renderPairs();
         refreshCustomSqlPairs();
@@ -313,8 +383,10 @@
       defaultOption.textContent = "master (default)";
       selector.append(defaultOption);
 
-      const pair = pairs[Number($("custom-pair-index").value)];
-      for (const database of pair?.databases || []) {
+      const discoveredDatabases = $("custom-scope").value === "Standalone"
+        ? standaloneDatabases.map((database) => ({ ...database, Database: database.Name }))
+        : (pairs[Number($("custom-pair-index").value)]?.databases || []);
+      for (const database of discoveredDatabases) {
         const option = document.createElement("option");
         option.value = database.Database;
         option.textContent = database.Database;
@@ -362,12 +434,17 @@
         sum + (pair.databases || []).filter((database) => database.Selected).length, 0);
       const hasServerWork = ["MigrateLogins", "MigrateAgentJobs", "MigrateAgentOperators", "ConfigureLinkedServers"]
         .some((key) => document.querySelector(`[data-option="${key}"]`)?.checked);
-      $("start").disabled = migrationActive || patchActive || (!selectedCount && !hasServerWork);
+      validationActive = pairs.some((pair) => pair.validationRunning);
+      $("start").disabled = migrationActive || patchActive || validationActive || (!selectedCount && !hasServerWork);
     }
 
     function getSelectedPatchTargets() {
       return [...document.querySelectorAll("#patch-targets input[data-patch-role]:checked")]
-        .map((checkbox) => ({ PairIndex: Number(checkbox.dataset.patchPairIndex), Role: checkbox.dataset.patchRole }));
+        .map((checkbox) => ({
+          PairIndex: Number(checkbox.dataset.patchPairIndex),
+          Role: checkbox.dataset.patchRole,
+          SqlInstance: checkbox.dataset.patchInstance
+        }));
     }
 
     function renderPatchTargets() {
@@ -391,7 +468,19 @@
           list.append(label);
         }
       });
-      if (!pairs.some((pair) => pair.Source || pair.Target)) {
+      if (standaloneInstanceInfo && standaloneSqlInstance) {
+        const label = document.createElement("label");
+        label.className = "check";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.dataset.patchPairIndex = "-1";
+        checkbox.dataset.patchRole = "Standalone";
+        checkbox.dataset.patchInstance = standaloneSqlInstance;
+        checkbox.checked = selected.has(`Standalone:${standaloneSqlInstance}`);
+        label.append(checkbox, document.createTextNode(`Individual instance: ${standaloneSqlInstance}`));
+        list.append(label);
+      }
+      if (!pairs.some((pair) => pair.Source || pair.Target) && !standaloneInstanceInfo) {
         const empty = document.createElement("div");
         empty.className = "muted";
         empty.textContent = "Enter SQL instances in the pair configuration to assess them for patching.";
@@ -413,9 +502,11 @@
       return date < new Date() ? `Out of support since ${date.toLocaleDateString()}` : `Support through ${date.toLocaleDateString()}`;
     }
 
-    function renderPatchCatalog(patches, updatedAt) {
+    function renderPatchCatalog(patches, updatedAt, catalogCount = 0, targets = []) {
       patchCatalog = patches || [];
+      patchCatalogCount = Number(catalogCount) || patchCatalog.length;
       patchCatalogUpdatedAt = updatedAt || null;
+      patchServerBuilds = targets || [];
       const selector = $("patch-catalog");
       const previousKB = selector.value;
       selector.replaceChildren();
@@ -428,8 +519,10 @@
       selector.disabled = patchCatalog.length === 0;
       if (patchCatalog.some((patch) => String(patch.KB) === previousKB)) selector.value = previousKB;
       $("patch-catalog-status").textContent = patchCatalog.length
-        ? `${patchCatalog.length} update(s) · refreshed ${formatPatchDate(updatedAt)}`
-        : "No SQL Server updates found in the current catalog.";
+        ? `${patchCatalog.length} of ${patchCatalogCount} update(s) match ${patchServerBuilds.map((target) => `${target.SqlInstance} (SQL ${target.MajorVersion} ${target.ServicePack})`).join(', ')} · refreshed ${formatPatchDate(updatedAt)}`
+        : patchServerBuilds.length
+          ? `No catalog updates match the selected SQL version/service-pack branch (${patchServerBuilds.map((target) => `${target.SqlInstance}: SQL ${target.MajorVersion} ${target.ServicePack}`).join(', ')}).`
+          : "Select one or more SQL instances to filter the update catalog.";
       patchAssessment = null;
       renderPatchAssessment(null);
       updatePatchControls();
@@ -514,7 +607,7 @@
       const assessmentMatchesSelection = patchAssessment &&
         String(patchAssessment.patch?.KB) === String($("patch-catalog").value) &&
         (patchAssessment.results || []).length === getSelectedPatchTargets().length;
-      $("refresh-patch-catalog").disabled = locked;
+      $("refresh-patch-catalog").disabled = locked || !hasTargets;
       $("patch-catalog").disabled = locked || patchCatalog.length === 0;
       $("assess-patch").disabled = locked || !hasPatch || !hasTargets;
       $("download-patch").disabled = locked || !hasPatch || !$("patch-update-path").value.trim();
@@ -522,6 +615,43 @@
         !(patchAssessment?.eligibleCount > 0) || !$("patch-update-path").value.trim();
       for (const control of document.querySelectorAll("#patch-targets input, #patch-update-path, #patch-restart")) {
         control.disabled = locked;
+      }
+    }
+
+    async function refreshPatchCatalog(refreshOnline) {
+      const targets = getSelectedPatchTargets();
+      if (!targets.length) {
+        renderPatchCatalog([], patchCatalogUpdatedAt, patchCatalogCount, []);
+        return;
+      }
+      $("patch-error").textContent = "";
+      $("patch-catalog-status").textContent = refreshOnline
+        ? "Refreshing SQL build catalog and matching selected server versions…"
+        : "Matching cached SQL build catalog to selected server versions…";
+      $("refresh-patch-catalog").disabled = true;
+      try {
+        const result = await api("/api/patch/catalog", { Refresh: refreshOnline, Targets: targets });
+        renderPatchCatalog(result.patches || [], result.updatedAt, result.catalogCount, result.targets);
+        if (refreshOnline) {
+          const availableCount = result.patches?.length || 0;
+          $("patch-catalog-status").textContent += ` · Microsoft build catalog refreshed; ${availableCount} matching update(s)`;
+        }
+      } catch (error) {
+        $("patch-error").textContent = error.message;
+        $("patch-catalog-status").textContent = "Catalog filtering failed. Verify connectivity and selected SQL instance access.";
+      } finally {
+        updatePatchControls();
+      }
+    }
+
+    async function handlePatchTargetsChanged() {
+      invalidatePatchAssessment("Selected servers changed. Reassess before applying.");
+      updatePatchControls();
+      if (!patchCatalogUpdatedAt) return;
+      if (getSelectedPatchTargets().length) {
+        await refreshPatchCatalog(false);
+      } else {
+        renderPatchCatalog([], patchCatalogUpdatedAt, patchCatalogCount, []);
       }
     }
 
@@ -555,8 +685,9 @@
           input.dataset.pairIndex = index;
           input.dataset.field = key;
           input.value = pair[key];
+          input.disabled = Boolean(pair.validationRunning);
           input.placeholder = key === "BackupPath" ? "\\\\backup-server\\sql-migrations\\instance" :
-            (key === "Source" ? "source-sql-instance" : "target-sql-instance");
+            (key === "Source" ? "hostname\\instance or 10.0.0.20,1433" : "hostname\\instance or 10.0.0.30,1433");
           wrapper.append(label, input);
           grid.append(wrapper);
         }
@@ -568,6 +699,7 @@
         modeSelect.id = modeLabel.htmlFor;
         modeSelect.dataset.pairIndex = index;
         modeSelect.dataset.mode = "MigrationMode";
+        modeSelect.disabled = Boolean(pair.validationRunning);
         for (const [value, text] of [
           ["Full", "Full database (schema + data)"],
           ["SchemaOnly", "Schema only (no table data)"]
@@ -583,10 +715,19 @@
         const actions = document.createElement("div");
         actions.className = "row";
         actions.style.marginTop = "10px";
+        const validate = document.createElement("button");
+        validate.type = "button";
+        validate.className = "secondary";
+        validate.dataset.action = "validate-pair";
+        validate.dataset.pairIndex = String(index);
+        validate.disabled = Boolean(pair.validationRunning);
+        validate.textContent = pair.validationRunning ? "Validating…" : "Validate pair";
+        actions.append(validate);
         const discover = document.createElement("button");
         discover.type = "button";
         discover.dataset.action = "discover";
         discover.dataset.pairIndex = index;
+        discover.disabled = Boolean(pair.validationRunning);
         discover.textContent = pair.databases ? "Refresh discovery" : "Discover databases";
         actions.append(discover);
         if (pairs.length > 1) {
@@ -595,6 +736,7 @@
           remove.className = "secondary";
           remove.dataset.action = "remove";
           remove.dataset.pairIndex = index;
+          remove.disabled = Boolean(pair.validationRunning);
           remove.textContent = "Remove pair";
           actions.append(remove);
         }
@@ -604,15 +746,171 @@
         summary.textContent = pair.summary || "Enter the SQL instances and shared backup path, then discover.";
         summary.dataset.summary = index;
         card.append(grid, actions, summary);
+        if (pair.validation) card.append(renderPairValidation(pair.validation));
         if (pair.databases) card.append(renderDatabaseTable(pair, index));
         list.append(card);
       });
-      $("add-pair").disabled = pairs.length >= 3 || migrationActive;
+      $("add-pair").disabled = pairs.length >= 3 || migrationActive || validationActive;
       refreshCustomSqlPairs();
       renderPatchTargets();
       invalidatePatchAssessment("Pair configuration changed. Reassess before applying.");
+      if (patchCatalogUpdatedAt) { void handlePatchTargetsChanged(); }
       updateStartButton();
     }
+
+    function renderPairValidation(validation) {
+      const wrap = document.createElement("div");
+      wrap.className = "table-wrap validation-results";
+      wrap.style.marginTop = "8px";
+      const table = document.createElement("table");
+      const head = document.createElement("thead");
+      head.innerHTML = "<tr><th>Check</th><th>Endpoint</th><th>Result</th><th>Details</th></tr>";
+      const body = document.createElement("tbody");
+      for (const result of validation.validation || []) {
+        const row = document.createElement("tr");
+        const role = document.createElement("td");
+        role.textContent = result.Role || "Validation";
+        const endpoint = document.createElement("td");
+        endpoint.textContent = result.Endpoint || "";
+        const status = document.createElement("td");
+        status.textContent = result.Status || "Unknown";
+        status.className = `validation-${String(result.Status || "").toLowerCase()}`;
+        const message = document.createElement("td");
+        message.textContent = result.Message || "";
+        row.append(role, endpoint, status, message);
+        body.append(row);
+      }
+      table.append(head, body);
+      wrap.append(table);
+      return wrap;
+    }
+
+    async function validatePair(index) {
+      const pair = pairs[index];
+      pair.Source = document.querySelector(`[data-pair-index="${index}"][data-field="Source"]`).value.trim();
+      pair.Target = document.querySelector(`[data-pair-index="${index}"][data-field="Target"]`).value.trim();
+      pair.BackupPath = document.querySelector(`[data-pair-index="${index}"][data-field="BackupPath"]`).value.trim();
+      pair.MigrationMode = document.querySelector(`[data-pair-index="${index}"][data-mode]`).value;
+      pair.validation = null;
+      pair.validationRunning = true;
+      pair.summary = "Checking SQL connectivity, supported versions, and shared backup access…";
+      renderPairs();
+      try {
+        pair.validation = await api("/api/validate-pair", {
+          Pair: {
+            Source: pair.Source,
+            Target: pair.Target,
+            BackupPath: pair.BackupPath,
+            MigrationMode: pair.MigrationMode
+          }
+        });
+        pair.summary = `Preflight: ${pair.validation.passedCount} passed · ${pair.validation.failedCount} failed · ${pair.validation.skippedCount} skipped.`;
+      } catch (error) {
+        pair.validation = null;
+        pair.summary = `Validation request failed: ${error.message}`;
+      } finally {
+        pair.validationRunning = false;
+        renderPairs();
+      }
+    }
+
+    function setCustomScope() {
+      const standalone = $("custom-scope").value === "Standalone";
+      $("custom-pair-controls").classList.toggle("hidden", standalone);
+      $("custom-instance-controls").classList.toggle("hidden", !standalone);
+      refreshCustomSqlDatabases();
+    }
+
+    function renderStandaloneDiscovery() {
+      const container = $("standalone-discovery-results");
+      container.replaceChildren();
+      if (!standaloneInstanceInfo) {
+        container.classList.add("hidden");
+        return;
+      }
+      container.classList.remove("hidden");
+      const table = document.createElement("table");
+      const head = document.createElement("thead");
+      head.innerHTML = "<tr><th>Database</th><th>Size</th><th>Compatibility</th><th>Status</th><th>Recovery</th></tr>";
+      const body = document.createElement("tbody");
+      if (!standaloneDatabases.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 5;
+        cell.className = "muted";
+        cell.textContent = "No eligible user databases found on this instance.";
+        row.append(cell);
+        body.append(row);
+      }
+      for (const database of standaloneDatabases) {
+        const row = document.createElement("tr");
+        for (const value of [
+          database.Name || "",
+          database.SizeMB === null || database.SizeMB === undefined ? "" : `${database.SizeMB} MB`,
+          database.Compatibility || "",
+          database.Status || "",
+          database.RecoveryModel || ""
+        ]) {
+          const cell = document.createElement("td");
+          cell.textContent = String(value);
+          row.append(cell);
+        }
+        body.append(row);
+      }
+      table.append(head, body);
+      container.append(table);
+    }
+
+    async function discoverStandaloneInstance() {
+      const enteredInstance = $("standalone-sql-instance").value.trim();
+      $("standalone-instance-error").textContent = "";
+      if (!enteredInstance) {
+        $("standalone-instance-error").textContent = "Enter a hostname, SQL instance, or IP address first.";
+        return;
+      }
+      $("discover-standalone-instance").disabled = true;
+      $("standalone-instance-status").textContent = `Connecting to ${enteredInstance} and reading database inventory…`;
+      standaloneInstanceInfo = null;
+      standaloneDatabases = [];
+      renderStandaloneDiscovery();
+      try {
+        const result = await api("/api/discover-instance", { SqlInstance: enteredInstance });
+        standaloneSqlInstance = result.sqlInstance || enteredInstance;
+        standaloneInstanceInfo = result;
+        standaloneDatabases = result.databases || [];
+        $("standalone-sql-instance").value = standaloneSqlInstance;
+        $("standalone-instance-status").textContent = `Connected · SQL Server ${result.version || "version unknown"} · ${standaloneDatabases.length} database(s) · ${result.computerName || standaloneSqlInstance}`;
+        renderStandaloneDiscovery();
+        refreshCustomSqlDatabases();
+        renderPatchTargets();
+        invalidatePatchAssessment("Standalone SQL instance changed. Reassess before applying.");
+      } catch (error) {
+        standaloneSqlInstance = "";
+        standaloneInstanceInfo = null;
+        standaloneDatabases = [];
+        $("standalone-instance-status").textContent = "Connection or discovery failed.";
+        $("standalone-instance-error").textContent = error.message;
+        refreshCustomSqlDatabases();
+        renderPatchTargets();
+      } finally {
+        $("discover-standalone-instance").disabled = false;
+      }
+    }
+
+    $("custom-scope").addEventListener("change", setCustomScope);
+    $("discover-standalone-instance").addEventListener("click", discoverStandaloneInstance);
+    $("standalone-sql-instance").addEventListener("input", () => {
+      standaloneSqlInstance = "";
+      standaloneInstanceInfo = null;
+      standaloneDatabases = [];
+      $("standalone-instance-status").textContent = "Endpoint changed. Validate and discover it before querying or patching.";
+      $("standalone-instance-error").textContent = "";
+      renderStandaloneDiscovery();
+      refreshCustomSqlDatabases();
+      renderPatchTargets();
+      invalidatePatchAssessment("Standalone SQL instance changed. Reassess before applying.");
+    });
+    setCustomScope();
 
     function renderDatabaseTable(pair, pairIndex) {
       const wrap = document.createElement("div");
@@ -703,6 +1001,7 @@
       const pair = pairs[Number(input.dataset.pairIndex)];
       pair[input.dataset.field] = input.value;
       pair.databases = null;
+      pair.validation = null;
       pair.summary = "Settings changed; run discovery again.";
       const card = input.closest(".pair-card");
       const summary = card.querySelector("[data-summary]");
@@ -713,21 +1012,20 @@
       if (discoverButton) discoverButton.textContent = "Discover databases";
       renderPatchTargets();
       invalidatePatchAssessment("SQL endpoints changed. Reassess before applying.");
+      if (patchCatalogUpdatedAt) { void handlePatchTargetsChanged(); }
       refreshCustomSqlDatabases();
       saveSettings();
       updateStartButton();
     });
 
     $("custom-pair-index").addEventListener("change", refreshCustomSqlDatabases);
-    $("patch-targets").addEventListener("change", () => {
-      invalidatePatchAssessment("Selected servers changed. Reassess before applying.");
-      updatePatchControls();
-    });
+    $("patch-targets").addEventListener("change", () => { void handlePatchTargetsChanged(); });
 
     $("pair-list").addEventListener("click", async (event) => {
       const button = event.target.closest("button[data-action]");
       if (!button) return;
       const index = Number(button.dataset.pairIndex);
+      if (button.dataset.action === "validate-pair") await validatePair(index);
       if (button.dataset.action === "discover") await discoverPair(index);
       if (button.dataset.action === "remove") {
         pairs.splice(index, 1);
@@ -743,6 +1041,7 @@
         const pair = pairs[pairIndex];
         pair.MigrationMode = target.value;
         pair.databases = null;
+        pair.validation = null;
         pair.summary = "Migration mode changed; run discovery again.";
         const card = target.closest(".pair-card");
         const summary = card.querySelector("[data-summary]");
@@ -845,19 +1144,7 @@
     }
 
     $("refresh-patch-catalog").addEventListener("click", async () => {
-      $("patch-error").textContent = "";
-      $("patch-catalog-status").textContent = "Refreshing SQL Server build catalog…";
-      $("refresh-patch-catalog").disabled = true;
-      try {
-        const result = await api("/api/patch/catalog", { Refresh: true });
-        renderPatchCatalog(result.patches || [], result.updatedAt);
-        $("patch-catalog-status").textContent = `${result.patches.length} update(s) · build catalog refreshed ${formatPatchDate(result.updatedAt)}`;
-      } catch (error) {
-        $("patch-error").textContent = error.message;
-        $("patch-catalog-status").textContent = "Catalog refresh failed. Check internet access and try again.";
-      } finally {
-        updatePatchControls();
-      }
+      await refreshPatchCatalog(true);
     });
 
     $("patch-catalog").addEventListener("change", () => {
@@ -895,39 +1182,50 @@
       const kb = $("patch-catalog").value;
       const updatePath = $("patch-update-path").value.trim();
       const restart = $("patch-restart").checked;
-      const selectedTargets = new Set(getSelectedPatchTargets().map(({ PairIndex, Role }) => `${PairIndex}:${Role}`));
+      const selectedTargets = new Set(getSelectedPatchTargets().map(({ PairIndex, Role, SqlInstance }) =>
+        Role === "Standalone" ? `Standalone:${SqlInstance}` : `${PairIndex}:${Role}`));
       const targets = (patchAssessment?.results || [])
-        .filter((item) => item.Status === "Eligible" && selectedTargets.has(`${item.PairIndex}:${item.Role}`))
-        .map((item) => ({ PairIndex: item.PairIndex, Role: item.Role }));
+        .filter((item) => item.Status === "Eligible" && selectedTargets.has(
+          item.Role === "Standalone" ? `Standalone:${item.SqlInstance}` : `${item.PairIndex}:${item.Role}`
+        ))
+        .map((item) => item.Role === "Standalone"
+          ? ({ Role: "Standalone", SqlInstance: item.SqlInstance })
+          : ({ PairIndex: item.PairIndex, Role: item.Role }));
       if (!targets.length) {
         $("patch-error").textContent = "No selected instance is eligible for this patch. Assess the current selection first.";
         return;
       }
-      const selectedNames = targets.map(({ PairIndex, Role }) => `Pair ${PairIndex + 1} ${Role}: ${pairs[PairIndex]?.[Role] || "unknown"}`);
+      const selectedNames = targets.map(({ PairIndex, Role, SqlInstance }) => Role === "Standalone"
+        ? `Individual instance: ${SqlInstance}`
+        : `Pair ${PairIndex + 1} ${Role}: ${pairs[PairIndex]?.[Role] || "unknown"}`);
       const rebootNote = restart ? "The Windows host may be restarted." : "Windows host restart is disabled.";
       if (!confirm(`Apply KB${kb} only to these eligible SQL instances?\n\n${selectedNames.join("\n")}\n\nSQL services may restart. ${rebootNote}\n\nConfirm you have a maintenance window and a recoverable backup.`)) return;
       await startPatchWorker("Apply", { KB: kb, Targets: targets, UpdatePath: updatePath, Restart: restart });
     });
 
     $("run-custom-sql").addEventListener("click", async () => {
+      const isStandalone = $("custom-scope").value === "Standalone";
       const pairIndex = Number($("custom-pair-index").value);
       const pair = pairs[pairIndex];
-      if (!pair) {
-        $("custom-sql-error").textContent = "Select a configured pair first.";
-        return;
-      }
+      const standaloneInput = $("standalone-sql-instance").value.trim();
       const query = $("custom-query").value.trim();
       const database = $("custom-database").value.trim();
       const serverRole = $("custom-server-role").value;
       $("custom-sql-error").textContent = "";
+      if (isStandalone && (!standaloneInstanceInfo || standaloneSqlInstance !== standaloneInput)) {
+        $("custom-sql-error").textContent = "Validate and discover the individual SQL instance before running a query.";
+        return;
+      }
+      if (!isStandalone && !pair) {
+        $("custom-sql-error").textContent = "Select a configured pair first.";
+        return;
+      }
       $("custom-sql-status").textContent = "Running custom SQL…";
       try {
-        const result = await api("/api/custom-sql", {
-          PairIndex: pairIndex,
-          ServerRole: serverRole,
-          Database: database,
-          Query: query
-        });
+        const body = isStandalone
+          ? { SqlInstance: standaloneSqlInstance, Database: database, Query: query }
+          : { PairIndex: pairIndex, ServerRole: serverRole, Database: database, Query: query };
+        const result = await api("/api/custom-sql", body);
         $("custom-sql-status").textContent = `Execution finished on ${result.instance} (${result.serverRole}) in ${result.elapsedMilliseconds} ms. Rows: ${result.rowCount}`;
         renderCustomSqlResults(result.rows || [], result.columns || []);
       } catch (error) {
@@ -952,7 +1250,7 @@
       try {
         await api("/api/login", { Username: $("username").value, Password: $("password").value });
         $("password").value = "";
-        showApplication(true);
+        showApplication(true, "Application", $("username").value);
       } catch (error) {
         $("login-error").textContent = error.message;
       }
@@ -1134,7 +1432,7 @@
     async function initialize() {
       try {
         const session = await api("/api/session");
-        showApplication(session.authenticated);
+        showApplication(session.authenticated, session.authMode, session.username);
       } catch (_) {
         showApplication(false);
       }

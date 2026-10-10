@@ -121,6 +121,35 @@ function Get-MigrationTargetDatabaseDecision {
     return 'Blocked'
 }
 
+function Get-MigrationSourceTargetPairDefaults {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]] $SourceTargets,
+        [Parameter()][ValidateRange(1, 3)][int] $MaxPairs = 3
+    )
+
+    $pairs = [System.Collections.Generic.List[object]]::new()
+    $endpointKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($configuredPair in $SourceTargets) {
+        $source = [string]$configuredPair.Source
+        $target = [string]$configuredPair.Target
+        $endpointKey = [string]::Join([char]0, @($source.Trim().ToLowerInvariant(), $target.Trim().ToLowerInvariant()))
+        if (-not $endpointKeys.Add($endpointKey)) { continue }
+        $migrationMode = if ($configuredPair.Contains('MigrationMode')) { [string]$configuredPair.MigrationMode } else { 'Full' }
+        if ($migrationMode -notin @('Full', 'SchemaOnly')) {
+            throw "MigrationMode must be 'Full' or 'SchemaOnly' when building web pair defaults."
+        }
+        $pairs.Add(@{
+            Source = $source
+            Target = $target
+            BackupPath = [string]$configuredPair.BackupPath
+            MigrationMode = $migrationMode
+        })
+        if ($pairs.Count -ge $MaxPairs) { break }
+    }
+    $pairs.ToArray()
+}
+
 function Test-MigrationServerWorkEnabled {
     [CmdletBinding()]
     param(
@@ -778,4 +807,4 @@ function Write-MigrationReports {
     [pscustomobject]@{ CsvPath = $csvPath; HtmlPath = $htmlPath }
 }
 
-Export-ModuleMember -Function Import-MigrationConfiguration, Get-MigrationTargetDatabaseDecision, Test-MigrationServerWorkEnabled, Get-MigrationDatabase, Test-MigrationDatabaseExists, Invoke-MigrationCustomSql, Get-MigrationState, Get-MigrationStateKey, Get-MigrationBackupPath, Get-MigrationRunBackupDirectory, Get-MigrationDatabaseBackupDirectory, Get-MigrationBackupStripeFiles, Write-MigrationProgressEvent, Wait-MigrationControl, Remove-MigrationRunBackupDirectory, Set-MigrationState, Write-MigrationReports
+Export-ModuleMember -Function Import-MigrationConfiguration, Get-MigrationTargetDatabaseDecision, Get-MigrationSourceTargetPairDefaults, Test-MigrationServerWorkEnabled, Get-MigrationDatabase, Test-MigrationDatabaseExists, Invoke-MigrationCustomSql, Get-MigrationState, Get-MigrationStateKey, Get-MigrationBackupPath, Get-MigrationRunBackupDirectory, Get-MigrationDatabaseBackupDirectory, Get-MigrationBackupStripeFiles, Write-MigrationProgressEvent, Wait-MigrationControl, Remove-MigrationRunBackupDirectory, Set-MigrationState, Write-MigrationReports

@@ -17,3 +17,8 @@ WebHost-*.log
 *.ps1xml
 *.tmp
 *.lock
+
+# Generated WiX installer staging and build outputs
+installer/bin/
+installer/obj/
+installer/staging/

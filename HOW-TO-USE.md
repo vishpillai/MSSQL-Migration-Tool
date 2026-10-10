@@ -7,8 +7,7 @@ This guide explains how to run the migration framework in the recommended order 
 Before running the tool, make sure you have:
 
 - Windows operating system
-- PowerShell 7.2 or later
-- dbatools installed for SQL Server discovery and migration
+- PowerShell 7.2 or later and dbatools for SQL Server discovery and migration
 - Pester installed if you want to run the unit tests
 - No separate browser UI packages or Node.js installation are required
 - Network access from the migration host to the source and target SQL Server instances
@@ -19,7 +18,15 @@ Before running the tool, make sure you have:
   - repair orphaned users and update statistics if enabled
 - Backup paths visible to the SQL Server service accounts and writable by the migration process
 
-Install the required modules when needed:
+For initial current-user setup, use the bootstrap. It installs PowerShell 7.2+ through winget if missing, then installs dbatools from PowerShell Gallery only if missing:
+
+```cmd
+Setup-DbMigrationTool.cmd
+```
+
+This bootstrap needs internet access only when a prerequisite is missing. For a disconnected workstation, install PowerShell 7.2+ and dbatools from your approved offline software repository first. Install Pester separately only if you plan to run tests.
+
+Manual module installation:
 
 ```powershell
 Install-Module dbatools -Scope CurrentUser -Force
@@ -91,7 +98,7 @@ Each source/target run writes checksummed, compressed, verified full-copy-only b
 
 ## 5. Supported install path and current status
 
-The verified and supported installation method is the Windows app bundle created by `Install-DbMigrationWeb.ps1`. It creates a stable app folder, desktop shortcut, and Start menu entry and has been validated by the automated test suite (53 passing tests). The app bundle is the supported install path for end users.
+The verified and supported installation method is the Windows app bundle created by `Install-DbMigrationWeb.ps1`. For a first-time current-user installation, start with `Setup-DbMigrationTool.cmd`; it bootstraps PowerShell 7.2+ through winget if missing, then installs dbatools from PowerShell Gallery only if missing. Internet access is needed only when a dependency is absent. It creates a stable app folder, desktop shortcut, and Start menu entry and has been validated by the automated test suite (55 passing tests).
 
 A WiX-based MSI/EXE packaging prototype is still under development and remains a separate engineering task. It is not the current recommended distribution path for production use.
 
@@ -162,15 +169,27 @@ Run credential initialization and the web host as the same dedicated Windows acc
   -Port 8443
 ```
 
+To use Active Directory Windows Integrated Authentication instead of the application password, skip `Initialize-DbMigrationWebAuth.ps1` and start the host with an AD group allowlist:
+
+```powershell
+.\Invoke-DbMigrationWeb.ps1 `
+  -HostName 'db-migration.contoso.com' `
+  -Port 8443 `
+  -AuthenticationMode Windows `
+  -WindowsAuthGroup 'CONTOSO\DbMigrationUsers'
+```
+
+Windows mode requires HTTPS, a domain service account, and an HTTP SPN for the host DNS name registered to that account for Kerberos. The app authenticates each browser request with Negotiate and authorizes AD group membership. SQL Server and backup-share operations still run under the web-host service account; running SQL as each signed-in user requires separate Kerberos constrained delegation and is not enabled.
+
 The setup prompts for the app password (at least 14 characters) and stores only a salted PBKDF2 hash. Open `https://db-migration.contoso.com:8443/` from an authorized client. Restrict the server firewall to intended client systems. SQL Server, backup-share, reports, and migration state operations use the Windows identity running the host; browser users do not delegate their own Windows credentials. Use a least-privilege host identity. Anyone with the dedicated app login can operate all source/target pairs in the configuration.
 
-The browser UI has fields for source SQL instance, target SQL instance, and shared backup directory (use the UNC path visible to both SQL Server service accounts). Add up to three pairs. Select **Remember source, target, and shared backup paths in this browser** to save those connection settings in that browser's local storage; uncheck it to remove the saved settings. This does not write endpoint changes to `config/migration.config.json`.
+The browser UI has fields for source SQL instance, target SQL instance, and shared backup directory (use the UNC path visible to both SQL Server service accounts). Enter a hostname, `HOST\INSTANCE`, IP address, and shared path manually. Choose **Validate pair** to check SQL connectivity, supported SQL versions, and whether both SQL Server services can access the shared path. Choose **Discover databases** for pair inventory and capacity preflight. For one-off work without a migration pair, use **Individual SQL instance** in the T-SQL workspace: validate/discover the entered server, then query its selected database or add it as a standalone patch target. Validation results are cleared when endpoint values change. Add up to three migration pairs. Select **Remember source, target, and shared backup paths in this browser** to save those connection settings in that browser's local storage; uncheck it to remove the saved settings. This does not write endpoint changes to `config/migration.config.json`.
 
 Discover each pair, select its databases, and review overwrite approvals. The browser workflow runs the pairs sequentially, and each pair's selected databases one at a time. For each database, it runs validation and capacity preflight, performs the backup and restore, verifies target access, runs selected post-migration checks, and deletes that database's temporary backup folder before starting the next database. Server-level objects run after that pair's databases and before the next pair. A failed validation, migration, post-migration action, backup cleanup, or server-object stage stops the sequence; it does not advance to the next database or pair. The command-line and desktop GUI workflows retain their configured concurrency behavior.
 
 ### Patch selected SQL instances
 
-The local web app provides an interactive SQL Server patch advisor for configured source/target instances. Migration and local package installation do not require internet access. Refreshing Microsoft/dbatools build metadata and downloading a selected KB require internet access from the app host; updates are not downloaded automatically.
+The local web app provides an interactive SQL Server patch advisor for configured pair endpoints or an individually validated SQL instance. Select the target endpoint(s) before refreshing; the KB dropdown only lists matching SQL major versions and service-pack branches, plus applicable forward service-pack upgrades. Migration and local package installation do not require internet access. Refreshing Microsoft/dbatools build metadata and downloading a selected KB require internet access from the app host; updates are not downloaded automatically.
 
 Expand **Patch selected SQL instances**, select endpoints, and choose **Refresh patch catalog**. Select a listed KB, then choose **Assess eligibility** to review installed build/KB, product and service-pack matching, already-installed or superseded status, and support lifecycle for each instance. Only rows marked eligible can be applied. Enter a repository folder accessible to both the app host and target Windows server, then choose **Download selected KB** or stage the matching Microsoft package there yourself. Downloading does not install the package.
 

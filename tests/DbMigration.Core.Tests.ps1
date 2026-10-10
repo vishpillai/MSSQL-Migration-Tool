@@ -23,6 +23,13 @@ Describe 'Migration web authentication' {
         { New-MigrationWebPasswordRecord -Username 'migration-admin' -Password $password } |
             Should -Throw '*at least 14 characters*'
     }
+
+    It 'checks Windows identity membership in an AD group or SID' {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+
+        Test-MigrationWebWindowsGroupMembership -Identity $identity -Group 'S-1-1-0' | Should -BeTrue
+        Test-MigrationWebWindowsGroupMembership -Identity $identity -Group 'S-1-0-0' | Should -BeFalse
+    }
 }
 
 Describe 'Portable web storage paths' {
@@ -74,6 +81,19 @@ Describe 'Migration configuration' {
 '@ | Set-Content -LiteralPath $path
 
         (Import-MigrationConfiguration -Path $path).SourceTargets[0].MigrationMode | Should -Be 'SchemaOnly'
+    }
+
+    It 'preserves configured migration modes in browser pair defaults' {
+        $pairs = @(
+            @{ Source = 'schema-source'; Target = 'schema-target'; BackupPath = 'C:\SchemaBackups'; MigrationMode = 'SchemaOnly' }
+            @{ Source = 'full-source'; Target = 'full-target'; BackupPath = 'C:\FullBackups' }
+        )
+
+        $defaults = @(Get-MigrationSourceTargetPairDefaults -SourceTargets $pairs)
+
+        $defaults.Count | Should -Be 2
+        $defaults[0].MigrationMode | Should -Be 'SchemaOnly'
+        $defaults[1].MigrationMode | Should -Be 'Full'
     }
 
     It 'rejects unknown migration modes' {
@@ -444,6 +464,28 @@ Describe 'SQL Server patch helper' {
             $Name -eq 'KB5104824' -and $Path -contains $repository -and $Architecture -eq 'x64'
         }
     }
+
+    It 'filters patch options to the selected SQL version and servicing branch' {
+        $catalog = @(
+            [pscustomobject]@{ Product = 'SQL Server 2022'; MajorVersion = '2022'; ServicePack = 'RTM'; UpdateLevel = 'CU27'; KB = '5104824'; BuildLevel = '16.0.4295'; ReleaseDate = '2026-09-15'; SupportedUntil = '' }
+            [pscustomobject]@{ Product = 'SQL Server 2019'; MajorVersion = '2019'; ServicePack = 'RTM'; UpdateLevel = 'CU32'; KB = '5054833'; BuildLevel = '15.0.4430'; ReleaseDate = '2025-02-27'; SupportedUntil = '' }
+            [pscustomobject]@{ Product = 'SQL Server 2016'; MajorVersion = '2016'; ServicePack = 'SP2'; UpdateLevel = 'CU17'; KB = '5001092'; BuildLevel = '13.0.5888'; ReleaseDate = '2021-03-29'; SupportedUntil = '' }
+            [pscustomobject]@{ Product = 'SQL Server 2016'; MajorVersion = '2016'; ServicePack = 'SP3'; UpdateLevel = 'Service Pack'; KB = '5003279'; BuildLevel = '13.0.6300'; ReleaseDate = '2021-09-15'; SupportedUntil = '' }
+            [pscustomobject]@{ Product = 'SQL Server 2016'; MajorVersion = '2016'; ServicePack = 'SP3'; UpdateLevel = 'GDR'; KB = '5102339'; BuildLevel = '13.0.7095'; ReleaseDate = '2026-07-14'; SupportedUntil = '' }
+        )
+
+        $sql2022Options = @(Get-MigrationRelevantPatchCatalog -Catalog $catalog -ServerBuilds @(
+            [pscustomobject]@{ MajorVersion = '2022'; ServicePack = 'RTM'; BuildLevel = '16.0.1000' }
+        ))
+        $sql2016Sp2Options = @(Get-MigrationRelevantPatchCatalog -Catalog $catalog -ServerBuilds @(
+            [pscustomobject]@{ MajorVersion = '2016'; ServicePack = 'SP2'; BuildLevel = '13.0.5888' }
+        ))
+
+        $sql2022Options.KB | Should -Be @('5104824')
+        $sql2016Sp2Options.KB | Should -Contain '5001092'
+        $sql2016Sp2Options.KB | Should -Contain '5003279'
+        $sql2016Sp2Options.KB | Should -Not -Contain '5102339'
+    }
 }
 
 Describe 'Migration state' {
@@ -621,20 +663,94 @@ Describe 'Migration reports' {
 Describe 'Application installation' {
     It 'installs the app bundle in a stable location and cleans up correctly' {
         $installRoot = Join-Path $TestDrive 'DbMigrationTool'
+        $portableAuth = Join-Path $installRoot 'portable\auth'
+        $portableLogs = Join-Path $installRoot 'portable\logs'
+        $null = New-Item -ItemType Directory -Path $portableAuth -Force
+        $null = New-Item -ItemType Directory -Path $portableLogs -Force
+        Set-Content -LiteralPath (Join-Path $portableAuth 'auth.json') -Value 'preserve-existing-auth'
+        Set-Content -LiteralPath (Join-Path $portableLogs 'existing.log') -Value 'preserve-existing-log'
 
         & (Join-Path $PSScriptRoot '..\Install-DbMigrationWeb.ps1') -CurrentUser -InstallPath $installRoot -NoDesktopShortcut -NoStartMenuShortcut
 
         Test-Path -LiteralPath (Join-Path $installRoot 'Start-PortableDbMigrationWeb.ps1') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'Start-DbMigrationWeb.cmd') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $installRoot 'Install-DbMigrationPrerequisites.ps1') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $installRoot 'Setup-DbMigrationTool.cmd') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $installRoot 'Setup-DbMigrationTool.ps1') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $installRoot 'Invoke-DbMigrationPatch.ps1') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'src\DbMigration.Patching.psm1') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'appinfo.json') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'portable\auth') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'portable\logs') | Should -BeTrue
+        (Get-Content -LiteralPath (Join-Path $installRoot 'portable\auth\auth.json') -Raw).TrimEnd() | Should -Be 'preserve-existing-auth'
+        (Get-Content -LiteralPath (Join-Path $installRoot 'portable\logs\existing.log') -Raw).TrimEnd() | Should -Be 'preserve-existing-log'
+        Test-Path -LiteralPath (Join-Path $installRoot 'portable\auth\auth.json') | Should -BeTrue
 
         & (Join-Path $PSScriptRoot '..\Uninstall-DbMigrationWeb.ps1') -InstallPath $installRoot
 
         Test-Path -LiteralPath $installRoot | Should -BeFalse
+    }
+
+    It 'does not copy workspace portable credentials into a fresh app install' {
+        $installRoot = Join-Path $TestDrive 'FreshDbMigrationTool'
+
+        & (Join-Path $PSScriptRoot '..\Install-DbMigrationWeb.ps1') -CurrentUser -InstallPath $installRoot -NoDesktopShortcut -NoStartMenuShortcut
+
+        Test-Path -LiteralPath (Join-Path $installRoot 'portable\auth\auth.json') | Should -BeFalse
+
+        & (Join-Path $PSScriptRoot '..\Uninstall-DbMigrationWeb.ps1') -InstallPath $installRoot
+    }
+}
+
+Describe 'Prerequisite installation' {
+    It 'reuses an already available dbatools installation' {
+        Import-Module dbatools -ErrorAction Stop
+
+        $result = & (Join-Path $PSScriptRoot '..\Install-DbMigrationPrerequisites.ps1') -Scope CurrentUser
+
+        $result.PowerShellVersion | Should -Be $PSVersionTable.PSVersion.ToString()
+        $result.DbatoolsVersion | Should -Not -BeNullOrEmpty
+        $result.InstalledByScript | Should -BeFalse
+        $result.Scope | Should -Be 'CurrentUser'
+    }
+}
+
+Describe 'Pair endpoint validation' {
+    BeforeAll {
+        Import-Module dbatools -ErrorAction Stop
+        Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.Discovery.psm1') -Force
+    }
+
+    It 'validates manually entered hostname, instance, IP, and UNC backup path' {
+        Import-Module dbatools -ErrorAction Stop
+        $script:connectionOrder = 0
+        $script:validatedSqlInstances = @()
+        Mock Connect-DbaInstance -ModuleName DbMigration.Discovery {
+            $script:connectionOrder++
+            $script:validatedSqlInstances += [string]$SqlInstance
+            $majorVersion = if ($script:connectionOrder -eq 1) { 15 } else { 16 }
+            [pscustomobject]@{ SqlInstance = $SqlInstance; VersionMajor = $majorVersion }
+        }
+        Mock Test-DbaPath -ModuleName DbMigration.Discovery { $true }
+        $configuration = @{
+            SourceTargets = @(@{
+                Source = '192.168.1.20\SQL2019'
+                Target = 'SQLTARGET\SQL2022'
+                BackupPath = '\\NAS01\SqlBackup'
+                MigrationMode = 'Full'
+            })
+        }
+
+        $results = @(Test-MigrationConfiguration -Configuration $configuration)
+
+        @($results | Where-Object { $_.Role -in @('Source', 'Target') -and $_.Status -eq 'Passed' }).Count | Should -Be 2
+        @($results | Where-Object { $_.Role -eq 'BackupPath' -and $_.Status -eq 'Passed' }).Count | Should -Be 1
+        $script:validatedSqlInstances | Should -Contain '192.168.1.20\SQL2019'
+        $script:validatedSqlInstances | Should -Contain 'SQLTARGET\SQL2022'
+        Should -Invoke Connect-DbaInstance -ModuleName DbMigration.Discovery -Times 2 -Exactly
+        Should -Invoke Test-DbaPath -ModuleName DbMigration.Discovery -Times 2 -Exactly -ParameterFilter {
+            $Path -eq '\\NAS01\SqlBackup'
+        }
     }
 }
 
