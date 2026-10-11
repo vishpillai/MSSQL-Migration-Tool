@@ -300,9 +300,9 @@ Describe 'Web host script safeguards' {
     }
 
     It 'enforces a single machine-wide web host instance' {
-        $script:webHostText | Should -Match "Global\\\\DbMigrationToolWebHost"
+        $script:webHostText | Should -Match 'Global\\DbMigrationToolWebHost'
         $portableText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -Raw
-        $portableText | Should -Match "Global\\\\DbMigrationToolWebHost"
+        $portableText | Should -Match 'Global\\DbMigrationToolWebHost'
     }
 }
 
