@@ -299,6 +299,12 @@ Describe 'Web host script safeguards' {
         $script:webHostText | Should -Not -Match 'Where-Object\s+\w+\s+-(ne|eq|gt|lt)\s+[^|)]*\s-and\s'
     }
 
+    It 'refuses local SQL Server patching with a clear message when not elevated, and the launcher self-elevates' {
+        $script:webHostText | Should -Match 'Test-WebHostElevated'
+        $script:webHostText | Should -Match 'needs administrator rights'
+        (Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -Raw) | Should -Match '-Verb RunAs'
+    }
+
     It 'enforces a single machine-wide web host instance' {
         $script:webHostText | Should -Match 'Global\\DbMigrationToolWebHost'
         $portableText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -Raw

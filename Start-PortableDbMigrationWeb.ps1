@@ -38,6 +38,23 @@ if ([System.Threading.Mutex]::TryOpenExisting('Global\DbMigrationToolWebHost', [
     Write-Host 'Another Database Migration web host is already running on this machine. Only one instance can run at a time; use the open browser tab or close the existing host first.'
     return
 }
+
+$isElevated = [System.Security.Principal.WindowsPrincipal]::new([System.Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isElevated -and -not $env:DBMIGRATION_NO_ELEVATE) {
+    Write-Host 'SQL Server patching needs administrator rights; requesting elevation (UAC prompt)...'
+    $relaunchArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath,
+        '-HostName', $HostName, '-Port', $Port, '-AppRoot', $AppRoot)
+    foreach ($name in @('Username', 'Password')) {
+        if ($PSBoundParameters.ContainsKey($name)) { $relaunchArguments += @("-$name", (Get-Variable -Name $name -ValueOnly)) }
+    }
+    try {
+        Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $relaunchArguments -Verb RunAs -ErrorAction Stop
+        return
+    }
+    catch {
+        Write-Host "Elevation was declined; continuing without administrator rights. SQL Server patching of local instances will be unavailable. ($($_.Exception.Message))"
+    }
+}
 $storage = Resolve-MigrationWebStoragePaths -AppRoot $AppRoot -PortableMode
 
 if (-not (Test-Path -LiteralPath $storage.AuthPath -PathType Leaf)) {

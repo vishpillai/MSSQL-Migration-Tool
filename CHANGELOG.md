@@ -9,6 +9,7 @@ follow semantic versioning.
 - Discovery no longer needs a shared backup path; it is required only when starting a migration. Sample placeholders now show as watermarks instead of real values.
 - Fixed the patch assessment failing with "parameter 'ne' is specified more than once", and added SQL Server 2025 to the patch catalog.
 - Only one web host can run per machine; launching a second one is refused with a clear message.
+- The launcher now asks for administrator rights (UAC) so SQL Server patching of local instances works; if the host is not elevated, patching a local instance fails fast with an explanatory message instead of "Console not elevated".
 ## 1.1.1 - 2026-10-11
 
 Installer and documentation status update.

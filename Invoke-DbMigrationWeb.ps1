@@ -786,6 +786,11 @@ function Get-WebPatchCatalogRecord {
     $record[0]
 }
 
+function Test-WebHostElevated {
+    $principal = [System.Security.Principal.WindowsPrincipal]::new([System.Security.Principal.WindowsIdentity]::GetCurrent())
+    $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Start-WebSqlServerPatch {
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary] $Body,
@@ -828,11 +833,16 @@ function Start-WebSqlServerPatch {
             throw [ArgumentException]::new('The update repository folder does not exist on the app host.')
         }
         foreach ($target in $targets) {
-            $assessment = Get-MigrationSqlServerPatchAssessment -SqlInstance $target.SqlInstance -KB $kb
-            if ($assessment.Status -ne 'Eligible') {
-                throw [ArgumentException]::new("Cannot apply KB$kb to '$($target.SqlInstance)': $($assessment.Status) - $($assessment.Reason)")
+            $instanceHost = ([string]$target.SqlInstance -split '[\\,]')[0].Trim().ToLowerInvariant()
+            $isLocalTarget = $instanceHost -in @('localhost', '.', '(local)', '127.0.0.1', '::1', $env:COMPUTERNAME.ToLowerInvariant())
+            if ($isLocalTarget -and -not (Test-WebHostElevated)) {
+                throw [System.InvalidOperationException]::new("Patching '$($target.SqlInstance)' needs administrator rights on this machine. Close the app and start it again with 'Run as administrator' (or accept the UAC prompt when launching), then retry.")
             }
-        }
+            $assessment = Get-MigrationSqlServerPatchAssessment -SqlInstance $target.SqlInstance             -KB $kb
+                        if ($assessment.Status -ne 'Eligible') {
+                            throw [ArgumentException]::new("Cannot apply KB$kb to '$($target.SqlInstance)': $($assessment.Status) - $($assessment.Reason)")
+                        }
+                    }
     }
 
     $runDirectory = Join-Path $env:LOCALAPPDATA 'DbMigrationWeb\Runs'
