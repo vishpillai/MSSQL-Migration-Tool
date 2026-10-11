@@ -2345,17 +2345,22 @@
         const requestsSection = document.createElement("section");
         requestsSection.className = "live-monitor-requests";
         const requestsHeading = document.createElement("h4");
-        requestsHeading.textContent = `Active requests (${(result.requests || []).length})`;
+        requestsHeading.textContent = `Who is active? · sp_who2-style sessions (${(result.requests || []).length})`;
         requestsSection.append(requestsHeading);
         const requestRows = (result.requests || []).map((request) => [
-          request.databaseName, request.requestStatus, request.command, request.waitType,
-          request.blockingSessionId, request.cpuTimeMs, request.elapsedTimeMs, request.logicalReads
+          request.sessionId, request.requestStatus, request.loginName, request.hostName,
+          request.programName, request.databaseName, request.command, request.waitType,
+          request.blockingSessionId, request.waitTimeMs, request.cpuTimeMs,
+          request.diskIo, request.elapsedTimeMs, request.waitResource,
+          request.lastRequestStartTime ? new Date(request.lastRequestStartTime).toLocaleString() : ""
         ]);
         renderReportingTableInto(requestsSection, [
-          "Database", "Status", "Command", "Wait type", "Blocked by", "CPU ms", "Elapsed ms", "Reads"
+          "SPID", "Status", "Login", "Host", "Program", "Database", "Command",
+          "Wait type", "Blocked by", "Wait ms", "CPU ms", "Disk I/O", "Elapsed ms",
+          "Wait resource", "Last request"
         ], requestRows, result.requestError
-          ? "Active request details could not be loaded."
-          : result.error ? "Performance data is unavailable." : "No active user requests.");
+          ? "Session activity details could not be loaded."
+          : result.error ? "Performance data is unavailable." : "No user sessions found.");
         card.append(requestsSection);
         container.append(card);
       }

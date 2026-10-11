@@ -1728,17 +1728,31 @@ SELECT
 '@
                 $requestsQuery = @'
 SELECT TOP (10)
-    DB_NAME(requests.database_id) AS DatabaseName,
-    requests.status AS RequestStatus,
+    sessions.session_id AS SessionId,
+    COALESCE(requests.status, sessions.status) AS RequestStatus,
+    sessions.login_name AS LoginName,
+    sessions.host_name AS HostName,
+    sessions.program_name AS ProgramName,
+    DB_NAME(COALESCE(requests.database_id, sessions.database_id)) AS DatabaseName,
     requests.command AS Command,
     requests.wait_type AS WaitType,
+    requests.wait_time AS WaitTimeMs,
+    requests.wait_resource AS WaitResource,
     requests.blocking_session_id AS BlockingSessionId,
-    requests.cpu_time AS CpuTimeMs,
-    requests.total_elapsed_time AS ElapsedTimeMs,
-    requests.logical_reads AS LogicalReads
-FROM sys.dm_exec_requests AS requests
-WHERE requests.session_id <> @@SPID
-ORDER BY requests.blocking_session_id DESC, requests.cpu_time DESC, requests.total_elapsed_time DESC;
+    COALESCE(requests.cpu_time, sessions.cpu_time) AS CpuTimeMs,
+    COALESCE(requests.total_elapsed_time, 0) AS ElapsedTimeMs,
+    COALESCE(requests.logical_reads + requests.reads + requests.writes, sessions.reads + sessions.writes) AS DiskIo,
+    sessions.last_request_start_time AS LastRequestStartTime
+FROM sys.dm_exec_sessions AS sessions
+LEFT JOIN sys.dm_exec_requests AS requests
+    ON requests.session_id = sessions.session_id
+WHERE sessions.is_user_process = 1
+    AND sessions.session_id <> @@SPID
+ORDER BY
+    CASE WHEN requests.blocking_session_id > 0 THEN 0 ELSE 1 END,
+    requests.cpu_time DESC,
+    sessions.cpu_time DESC,
+    sessions.last_request_start_time DESC;
 '@
                 $diskQuery = @'
 SELECT
@@ -1812,14 +1826,21 @@ ORDER BY volumes.volume_mount_point;
                             ))
                             $result.requests = @($requestRows | ForEach-Object {
                                 @{
+                                    sessionId = $_.SessionId
                                     databaseName = $_.DatabaseName
                                     requestStatus = $_.RequestStatus
+                                    loginName = $_.LoginName
+                                    hostName = $_.HostName
+                                    programName = $_.ProgramName
                                     command = $_.Command
                                     waitType = $_.WaitType
+                                    waitTimeMs = $_.WaitTimeMs
+                                    waitResource = $_.WaitResource
                                     blockingSessionId = if ($null -eq $_.BlockingSessionId -or $_.BlockingSessionId -is [System.DBNull]) { $null } else { $_.BlockingSessionId }
                                     cpuTimeMs = $_.CpuTimeMs
                                     elapsedTimeMs = $_.ElapsedTimeMs
-                                    logicalReads = $_.LogicalReads
+                                    diskIo = $_.DiskIo
+                                    lastRequestStartTime = $_.LastRequestStartTime
                                 }
                             })
                         }
