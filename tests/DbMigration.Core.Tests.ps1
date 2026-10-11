@@ -267,6 +267,29 @@ Describe 'Custom SQL execution helpers' {
     }
 }
 
+Describe 'Web patch target resolution' {
+    BeforeAll {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PSScriptRoot '..\Invoke-DbMigrationWeb.ps1'), [ref]$null, [ref]$null)
+        $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'ConvertTo-WebPatchTargets' }, $true)
+        . ([scriptblock]::Create($fn.Extent.Text))
+        function Get-WebPair { param($Index) @{ Source = 'source'; Target = 'target' } }
+    }
+
+    It 'uses the supplied SqlInstance for source and target roles' {
+        $targets = @(ConvertTo-WebPatchTargets -Selections @(
+            @{ PairIndex = 0; Role = 'Source'; SqlInstance = 'localhost' },
+            @{ PairIndex = 0; Role = 'Target'; SqlInstance = 'localhost\NODE2' }))
+        $targets[0].SqlInstance | Should -Be 'localhost'
+        $targets[1].SqlInstance | Should -Be 'localhost\NODE2'
+    }
+
+    It 'falls back to the configured pair when no SqlInstance is supplied' {
+        $targets = @(ConvertTo-WebPatchTargets -Selections @(@{ PairIndex = 0; Role = 'Source' }))
+        $targets[0].SqlInstance | Should -Be 'source'
+    }
+}
+
 Describe 'SQL Server patch helper' {
     BeforeAll {
         Import-Module dbatools -ErrorAction Stop

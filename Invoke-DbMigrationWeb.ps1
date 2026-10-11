@@ -706,6 +706,28 @@ function Start-WebMigrationPlan {
     }
 }
 
+function Get-WebServerPatchLevel {
+    param([Parameter(Mandatory)][System.Collections.IDictionary] $Target)
+    $productVersion = [string](Invoke-DbaQuery -SqlInstance $Target.SqlInstance -Database master -EnableException -ErrorAction Stop `
+        -Query "SELECT CONVERT(nvarchar(50), SERVERPROPERTY('ProductVersion')) AS ProductVersion" |
+        Select-Object -First 1).ProductVersion
+    $build = @(Get-DbaBuild -Build $productVersion -EnableException -ErrorAction Stop | Select-Object -First 1)
+    if (-not $build) {
+        throw "Could not determine SQL Server build for '$($Target.SqlInstance)'."
+    }
+    @{
+        SqlInstance = $Target.SqlInstance
+        Role = $Target.Role
+        PairIndex = $Target.PairIndex
+        MajorVersion = [string]$build[0].NameLevel
+        ServicePack = [string]$build[0].SPLevel
+        BuildLevel = [string]$build[0].BuildLevel
+        CurrentPatch = [string]$build[0].CULevel
+        ProductVersion = $productVersion
+        KB = [string]$build[0].KBLevel
+    }
+}
+
 function ConvertTo-WebPatchTargets {
     param([Parameter(Mandatory)][object[]] $Selections)
 
@@ -733,8 +755,13 @@ function ConvertTo-WebPatchTargets {
                 throw [ArgumentException]::new("Role must be 'Source', 'Target', or a standalone SqlInstance.")
             }
             $pairIndex = [int]$selection.PairIndex
-            $pair = Get-WebPair -Index $pairIndex
-            $sqlInstance = [string]$pair[$role]
+            if ($selection.Contains('SqlInstance') -and -not [string]::IsNullOrWhiteSpace([string]$selection.SqlInstance)) {
+                $sqlInstance = ([string]$selection.SqlInstance).Trim()
+            }
+            else {
+                $pair = Get-WebPair -Index $pairIndex
+                $sqlInstance = [string]$pair[$role]
+            }
         }
         if ([string]::IsNullOrWhiteSpace($sqlInstance)) {
             throw [ArgumentException]::new('A non-empty SQL instance is required for every patch target.')
@@ -1039,33 +1066,35 @@ try {
                 $script:PatchCatalog = @(Get-MigrationSqlServerPatchCatalog -Refresh:$body.Refresh)
                 $script:PatchCatalogUpdatedAt = [DateTime]::UtcNow.ToString('o')
                 $serverBuilds = [System.Collections.Generic.List[object]]::new()
+                $levelErrors = [System.Collections.Generic.List[string]]::new()
                 foreach ($target in $targets) {
-                    $productVersion = [string](Invoke-DbaQuery -SqlInstance $target.SqlInstance -Database master -EnableException -ErrorAction Stop `
-                        -Query "SELECT CONVERT(nvarchar(50), SERVERPROPERTY('ProductVersion')) AS ProductVersion" |
-                        Select-Object -First 1).ProductVersion
-                    $build = @(Get-DbaBuild -Build $productVersion -EnableException -ErrorAction Stop |
-                        Select-Object -First 1)
-                    if (-not $build) {
-                        throw "Could not determine SQL Server build for '$($target.SqlInstance)'."
-                    }
-                    $serverBuilds.Add(@{
-                        SqlInstance = $target.SqlInstance
-                        Role = $target.Role
-                        PairIndex = $target.PairIndex
-                        MajorVersion = [string]$build[0].NameLevel
-                        ServicePack = [string]$build[0].SPLevel
-                        BuildLevel = [string]$build[0].BuildLevel
-                        CurrentPatch = [string]$build[0].CULevel
-                    })
+                    try { $serverBuilds.Add((Get-WebServerPatchLevel -Target $target)) }
+                    catch { $levelErrors.Add("$($target.SqlInstance): $($_.Exception.Message)") }
+                }
+                if ($serverBuilds.Count -eq 0 -and $levelErrors.Count -gt 0) {
+                    throw [System.InvalidOperationException]::new("Could not read the SQL Server version of any selected instance. $($levelErrors -join ' | ')")
                 }
                 $relevantCatalog = @(Get-MigrationRelevantPatchCatalog -Catalog $script:PatchCatalog -ServerBuilds $serverBuilds.ToArray())
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
                     patches = $relevantCatalog
                     catalogCount = $script:PatchCatalog.Count
                     targets = $serverBuilds.ToArray()
+                    errors = $levelErrors.ToArray()
                     updatedAt = $script:PatchCatalogUpdatedAt
                     onlineRefresh = [bool]$body.Refresh
                 }
+                continue
+            }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/patch/levels') {
+                $body = Read-WebRequestJson -Request $request
+                if (-not $body.Contains('Targets') -or $body.Targets -isnot [array]) {
+                    throw [ArgumentException]::new('Targets must be provided as an array.')
+                }
+                $levels = foreach ($target in @(ConvertTo-WebPatchTargets -Selections @($body.Targets))) {
+                    try { Get-WebServerPatchLevel -Target $target }
+                    catch { @{ SqlInstance = $target.SqlInstance; Role = $target.Role; PairIndex = $target.PairIndex; Error = $_.Exception.Message } }
+                }
+                Send-WebJson -Response $response -StatusCode 200 -Value @{ levels = @($levels) }
                 continue
             }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/patch/assess') {
@@ -1167,7 +1196,7 @@ try {
                 $pairIndex = $null
                 if ($body.Contains('SqlInstance') -and -not [string]::IsNullOrWhiteSpace([string]$body.SqlInstance)) {
                     $sqlInstance = ([string]$body.SqlInstance).Trim()
-                    $role = 'Standalone'
+                    $role = if ($body.Contains('ServerRole') -and [string]$body.ServerRole -in @('Source', 'Target')) { [string]$body.ServerRole } else { 'Standalone' }
                 }
                 else {
                     if (-not $body.Contains('PairIndex') -or -not $body.Contains('ServerRole')) {
@@ -1189,11 +1218,26 @@ try {
                 }
                 $query = [string]$body.Query
                 $startedAt = [DateTime]::UtcNow
-                $rows = @(Invoke-MigrationCustomSql -SqlInstance $sqlInstance -Database $database -Query $query)
+                $rawRows = @(Invoke-MigrationCustomSql -SqlInstance $sqlInstance -Database $database -Query $query)
+                $rows = @($rawRows | ForEach-Object {
+                    $flat = [ordered]@{}
+                    if ($_ -is [System.Data.DataRow]) {
+                        foreach ($column in $_.Table.Columns) {
+                            $value = $_[$column]
+                            $flat[$column.ColumnName] = if ($value -is [System.DBNull]) { $null } else { $value }
+                        }
+                    }
+                    else {
+                        foreach ($property in $_.PSObject.Properties) {
+                            $flat[$property.Name] = $property.Value
+                        }
+                    }
+                    $flat
+                })
                 $elapsedMilliseconds = [int](([DateTime]::UtcNow - $startedAt).TotalMilliseconds)
                 $columns = @()
                 if ($rows.Count -gt 0) {
-                    $columns = @($rows[0].PSObject.Properties.Name)
+                    $columns = @($rows[0].Keys)
                 }
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
                     instance = $sqlInstance

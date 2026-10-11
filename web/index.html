@@ -38,6 +38,7 @@
     .patch-panel summary { padding: 8px; cursor: pointer; font-size: 13px; font-weight: 600; background: var(--panel-title); }
     .patch-content { padding: 9px; }
     #patch-targets { display: grid; gap: 6px; margin: 8px 0 12px; }
+    .patch-level { margin: 1px 0 4px 24px; }
     .patch-actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 9px 0; }
     .patch-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 6px; margin: 10px 0; }
     .patch-metric { border: 1px solid #c3cbd2; background: #fff; padding: 7px; }
@@ -157,6 +158,7 @@
             <p class="muted">Refresh Microsoft’s SQL build catalog, assess compatibility and installed build state, then download and apply a selected KB. Catalog refresh and package download need internet access; assessment and installation use the local SQL environment. The repository must be accessible to the app host and target server.</p>
             <div id="patch-targets"></div>
             <div class="patch-actions">
+              <button id="check-patch-levels" class="secondary" type="button">Check patch levels</button>
               <button id="refresh-patch-catalog" class="secondary" type="button">Refresh update catalog</button>
               <span id="patch-catalog-status" class="muted" aria-live="polite">Catalog not loaded.</span>
             </div>
@@ -447,6 +449,25 @@
         }));
     }
 
+    const patchLevels = new Map();
+
+    function describePatchLevel(sqlInstance) {
+      const level = patchLevels.get(String(sqlInstance).toLowerCase());
+      if (!level) return "Current patch level: not checked";
+      if (level.Error) return `Current patch level unavailable: ${level.Error}`;
+      const parts = [`SQL Server ${level.MajorVersion}`, level.ServicePack, level.CurrentPatch].filter(Boolean);
+      return `Current patch level: ${parts.join(" ")} · build ${level.ProductVersion || level.BuildLevel}${level.KB ? ` · KB${level.KB}` : ""}`;
+    }
+
+    function appendPatchTarget(list, label, sqlInstance) {
+      const item = document.createElement("div");
+      const level = document.createElement("div");
+      level.className = "muted patch-level";
+      level.textContent = describePatchLevel(sqlInstance);
+      item.append(label, level);
+      list.append(item);
+    }
+
     function renderPatchTargets() {
       const list = $("patch-targets");
       const selected = new Set([...list.querySelectorAll("input[data-patch-role]:checked")]
@@ -465,7 +486,7 @@
           checkbox.dataset.patchInstance = sqlInstance;
           checkbox.checked = selected.has(`${role}:${sqlInstance}`);
           label.append(checkbox, document.createTextNode(`Pair ${pairIndex + 1} ${role}: ${sqlInstance}`));
-          list.append(label);
+          appendPatchTarget(list, label, sqlInstance);
         }
       });
       if (standaloneInstanceInfo && standaloneSqlInstance) {
@@ -478,7 +499,7 @@
         checkbox.dataset.patchInstance = standaloneSqlInstance;
         checkbox.checked = selected.has(`Standalone:${standaloneSqlInstance}`);
         label.append(checkbox, document.createTextNode(`Individual instance: ${standaloneSqlInstance}`));
-        list.append(label);
+        appendPatchTarget(list, label, standaloneSqlInstance);
       }
       if (!pairs.some((pair) => pair.Source || pair.Target) && !standaloneInstanceInfo) {
         const empty = document.createElement("div");
@@ -507,6 +528,8 @@
       patchCatalogCount = Number(catalogCount) || patchCatalog.length;
       patchCatalogUpdatedAt = updatedAt || null;
       patchServerBuilds = targets || [];
+      for (const level of patchServerBuilds) if (level.SqlInstance) patchLevels.set(level.SqlInstance.toLowerCase(), level);
+      renderPatchTargets();
       const selector = $("patch-catalog");
       const previousKB = selector.value;
       selector.replaceChildren();
@@ -632,6 +655,7 @@
       try {
         const result = await api("/api/patch/catalog", { Refresh: refreshOnline, Targets: targets });
         renderPatchCatalog(result.patches || [], result.updatedAt, result.catalogCount, result.targets);
+        if (result.errors?.length) $("patch-error").textContent = `Could not reach: ${result.errors.join(" | ")}`;
         if (refreshOnline) {
           const availableCount = result.patches?.length || 0;
           $("patch-catalog-status").textContent += ` · Microsoft build catalog refreshed; ${availableCount} matching update(s)`;
@@ -644,9 +668,22 @@
       }
     }
 
+    async function loadPatchLevels(targets) {
+      if (!targets.length) return;
+      try {
+        const result = await api("/api/patch/levels", { Targets: targets });
+        for (const level of result.levels || []) patchLevels.set(level.SqlInstance.toLowerCase(), level);
+      } catch (error) {
+        for (const target of targets) patchLevels.set(target.SqlInstance.toLowerCase(), { Error: error.message });
+      }
+      renderPatchTargets();
+    }
+
     async function handlePatchTargetsChanged() {
       invalidatePatchAssessment("Selected servers changed. Reassess before applying.");
       updatePatchControls();
+      const missing = getSelectedPatchTargets().filter((target) => !patchLevels.has(target.SqlInstance.toLowerCase()));
+      if (missing.length) await loadPatchLevels(missing);
       if (!patchCatalogUpdatedAt) return;
       if (getSelectedPatchTargets().length) {
         await refreshPatchCatalog(false);
@@ -1143,6 +1180,18 @@
       }
     }
 
+    $("check-patch-levels").addEventListener("click", async () => {
+      const seen = new Set();
+      const all = [...document.querySelectorAll("#patch-targets input[data-patch-role]")].map((checkbox) => ({
+        PairIndex: Number(checkbox.dataset.patchPairIndex),
+        Role: checkbox.dataset.patchRole,
+        SqlInstance: checkbox.dataset.patchInstance
+      })).filter((target) => !seen.has(target.SqlInstance.toLowerCase()) && seen.add(target.SqlInstance.toLowerCase()));
+      const button = $("check-patch-levels");
+      button.disabled = true;
+      try { await loadPatchLevels(all); } finally { button.disabled = false; }
+    });
+
     $("refresh-patch-catalog").addEventListener("click", async () => {
       await refreshPatchCatalog(true);
     });
@@ -1190,7 +1239,7 @@
         ))
         .map((item) => item.Role === "Standalone"
           ? ({ Role: "Standalone", SqlInstance: item.SqlInstance })
-          : ({ PairIndex: item.PairIndex, Role: item.Role }));
+          : ({ PairIndex: item.PairIndex, Role: item.Role, SqlInstance: item.SqlInstance }));
       if (!targets.length) {
         $("patch-error").textContent = "No selected instance is eligible for this patch. Assess the current selection first.";
         return;
@@ -1224,7 +1273,7 @@
       try {
         const body = isStandalone
           ? { SqlInstance: standaloneSqlInstance, Database: database, Query: query }
-          : { PairIndex: pairIndex, ServerRole: serverRole, Database: database, Query: query };
+          : { PairIndex: pairIndex, ServerRole: serverRole, SqlInstance: pair?.[serverRole] || "", Database: database, Query: query };
         const result = await api("/api/custom-sql", body);
         $("custom-sql-status").textContent = `Execution finished on ${result.instance} (${result.serverRole}) in ${result.elapsedMilliseconds} ms. Rows: ${result.rowCount}`;
         renderCustomSqlResults(result.rows || [], result.columns || []);
