@@ -69,6 +69,23 @@ function Get-SafeId {
     return $safe
 }
 
+function Add-DirectoryCleanupComponent {
+    param(
+        [Parameter(Mandatory)][string] $DirectoryId,
+        [Parameter(Mandatory)][string] $LogicalPath
+    )
+
+    $safePath = Get-SafeId -Value $LogicalPath
+    $componentId = 'cmp_cleanup_' + $safePath
+    $removeFolderId = 'remove_' + $safePath
+    $guid = [guid]::NewGuid().ToString('B')
+    $manifest.Add('      <Component Id="' + $componentId + '" Guid="' + $guid + '" Directory="' + $DirectoryId + '">')
+    $manifest.Add('        <RemoveFolder Id="' + $removeFolderId + '" On="uninstall" />')
+    $manifest.Add('        <RegistryValue Root="HKCU" Key="Software\DbMigrationTool\AppFiles" Name="' + $componentId + '" Type="integer" Value="1" KeyPath="yes" />')
+    $manifest.Add('      </Component>')
+    $componentRefs.Add('      <ComponentRef Id="' + $componentId + '" />')
+}
+
 function Add-DirectoryEntries {
     param(
         [Parameter(Mandatory)][string] $CurrentPath,
@@ -81,6 +98,7 @@ function Add-DirectoryEntries {
         if ($entry.PSIsContainer) {
             $dirId = 'dir_' + (Get-SafeId -Value ($LogicalPath + '_' + $entry.Name))
             $manifest.Add('      <Directory Id="' + $dirId + '" Name="' + $entry.Name + '">')
+            Add-DirectoryCleanupComponent -DirectoryId $dirId -LogicalPath ($LogicalPath + '_' + $entry.Name)
             Add-DirectoryEntries -CurrentPath $entry.FullName -ParentDirectoryId $dirId -LogicalPath ($LogicalPath + '_' + $entry.Name)
             $manifest.Add('      </Directory>')
             continue
@@ -88,7 +106,7 @@ function Add-DirectoryEntries {
 
         $componentId = 'cmp_' + (Get-SafeId -Value ($LogicalPath + '_' + $entry.Name))
         $fileId = 'file_' + (Get-SafeId -Value ($LogicalPath + '_' + $entry.Name))
-        $source = [System.IO.Path]::GetRelativePath($stagingRoot, $entry.FullName) -replace '\\', '/'
+        $source = [System.IO.Path]::GetRelativePath($PSScriptRoot, $entry.FullName) -replace '\\', '/'
         $guid = [guid]::NewGuid().ToString('B')
         $manifest.Add('      <Component Id="' + $componentId + '" Guid="' + $guid + '" Directory="' + $ParentDirectoryId + '">')
         $manifest.Add('        <File Id="' + $fileId + '" Source="' + $source + '" />')
@@ -98,10 +116,13 @@ function Add-DirectoryEntries {
     }
 }
 
+Add-DirectoryCleanupComponent -DirectoryId 'INSTALLFOLDER' -LogicalPath 'installfolder'
+
 Get-ChildItem -LiteralPath $stagingRoot -Force | Sort-Object Name | ForEach-Object {
     if ($_.PSIsContainer) {
         $dirId = 'dir_' + (Get-SafeId -Value ('root_' + $_.Name))
         $manifest.Add('      <Directory Id="' + $dirId + '" Name="' + $_.Name + '">')
+        Add-DirectoryCleanupComponent -DirectoryId $dirId -LogicalPath ('root_' + $_.Name)
         Add-DirectoryEntries -CurrentPath $_.FullName -ParentDirectoryId $dirId -LogicalPath ('root_' + $_.Name)
         $manifest.Add('      </Directory>')
         return
@@ -109,7 +130,7 @@ Get-ChildItem -LiteralPath $stagingRoot -Force | Sort-Object Name | ForEach-Obje
 
     $componentId = 'cmp_' + (Get-SafeId -Value ('root_' + $_.Name))
     $fileId = 'file_' + (Get-SafeId -Value ('root_' + $_.Name))
-    $source = [System.IO.Path]::GetRelativePath($stagingRoot, $_.FullName) -replace '\\', '/'
+    $source = [System.IO.Path]::GetRelativePath($PSScriptRoot, $_.FullName) -replace '\\', '/'
     $guid = [guid]::NewGuid().ToString('B')
     $manifest.Add('      <Component Id="' + $componentId + '" Guid="' + $guid + '" Directory="INSTALLFOLDER">')
     $manifest.Add('        <File Id="' + $fileId + '" Source="' + $source + '" />')

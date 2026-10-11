@@ -3,6 +3,10 @@
 Notable changes to the SQL Server migration tool are documented here. Versions
 follow semantic versioning.
 
+## Unreleased
+
+- Added SSMS-style history: previously used servers and backup paths are suggested as you type in the pair, patch, and standalone fields, and choosing a known source or target autofills its last-used partner and backup path. Only connection details are stored (in browser local storage, never credentials); use "Clear history" to reset.
+- Discovery no longer needs a shared backup path; it is required only when starting a migration. Sample placeholders now show as watermarks instead of real values.
 ## 1.1.1 - 2026-10-11
 
 Installer and documentation status update.

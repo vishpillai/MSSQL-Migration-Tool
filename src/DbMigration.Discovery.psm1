@@ -255,7 +255,7 @@ function Test-MigrationConfiguration {
                 }
             }
         }
-        if ($migrationMode -eq 'SchemaOnly') {
+        if ($migrationMode -eq 'SchemaOnly' -or [string]::IsNullOrWhiteSpace([string]$pair.BackupPath)) {
             [pscustomobject]@{
                 Source = $pair.Source
                 Target = $pair.Target
@@ -263,7 +263,7 @@ function Test-MigrationConfiguration {
                 Role = 'BackupPath'
                 SqlVersionMajor = $null
                 Status = 'Skipped'
-                Message = 'Backup-path validation is not required for schema-only migration.'
+                Message = if ($migrationMode -eq 'SchemaOnly') { 'Backup-path validation is not required for schema-only migration.' } else { 'No shared backup path entered; it is only required when migrating.' }
             }
             continue
         }

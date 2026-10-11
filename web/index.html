@@ -134,6 +134,7 @@
         <p class="muted">Pairs run one after another. Databases within each pair run sequentially; each database is validated, migrated, post-checked, and its temporary backup deleted before the next begins.</p>
         <p class="muted">Enter a hostname, SQL instance (for example, HOST\INSTANCE), or IP address. Validate checks SQL connectivity/version and shared-drive access before discovery.</p>
         <label class="check"><input id="remember-settings" type="checkbox" checked> Remember source, target, and shared backup paths in this browser</label>
+        <p class="muted">Previously used servers and backup paths are suggested as you type (like SSMS), and picking a known source or target autofills its last-used partner and backup path. No credentials are stored. <a href="#" id="clear-history">Clear history</a></p>
         <div id="pair-list"></div>
         <div class="row">
           <button id="add-pair" class="secondary" type="button">Add another instance pair</button>
@@ -255,8 +256,70 @@
     </div>
   </main>
   <footer>Developed by - vishal pillai</footer>
+  <datalist id="history-servers"></datalist>
+  <datalist id="history-paths"></datalist>
   <script>
     const $ = (id) => document.getElementById(id);
+    const historyKey = "dbMigrationHistory.v1";
+    const historyLimit = 25;
+
+    function loadHistory() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(historyKey) || "null");
+        return {
+          servers: Array.isArray(saved?.servers) ? saved.servers.filter((x) => typeof x === "string") : [],
+          paths: Array.isArray(saved?.paths) ? saved.paths.filter((x) => typeof x === "string") : [],
+          pairs: Array.isArray(saved?.pairs) ? saved.pairs.filter((x) => x && typeof x === "object") : []
+        };
+      } catch (_) {
+        return { servers: [], paths: [], pairs: [] };
+      }
+    }
+
+    function pushRecent(list, value) {
+      const text = String(value || "").trim();
+      if (!text) return list;
+      return [text, ...list.filter((x) => x.toLowerCase() !== text.toLowerCase())].slice(0, historyLimit);
+    }
+
+    function renderHistoryLists() {
+      const history = loadHistory();
+      const fill = (id, values) => {
+        $(id).replaceChildren(...values.map((value) => {
+          const option = document.createElement("option");
+          option.value = value;
+          return option;
+        }));
+      };
+      fill("history-servers", history.servers);
+      fill("history-paths", history.paths);
+    }
+
+    // Connection details only (never credentials) are kept, like SSMS's recent server list.
+    function recordHistory({ servers = [], paths = [], pair = null } = {}) {
+      try {
+        const history = loadHistory();
+        for (const server of servers) history.servers = pushRecent(history.servers, server);
+        for (const path of paths) history.paths = pushRecent(history.paths, path);
+        if (pair && String(pair.Source || "").trim() && String(pair.Target || "").trim()) {
+          const entry = {
+            Source: pair.Source.trim(),
+            Target: pair.Target.trim(),
+            BackupPath: String(pair.BackupPath || "").trim(),
+            MigrationMode: pair.MigrationMode === "SchemaOnly" ? "SchemaOnly" : "Full"
+          };
+          history.pairs = [entry, ...history.pairs.filter((x) =>
+            String(x.Source).toLowerCase() !== entry.Source.toLowerCase() ||
+            String(x.Target).toLowerCase() !== entry.Target.toLowerCase())].slice(0, historyLimit);
+        }
+        localStorage.setItem(historyKey, JSON.stringify(history));
+        renderHistoryLists();
+      } catch (_) {}
+    }
+
+    function recordPairHistory(pair) {
+      recordHistory({ servers: [pair.Source, pair.Target], paths: [pair.BackupPath], pair });
+    }
     let pairs = [];
     let standaloneSqlInstance = "";
     let standaloneInstanceInfo = null;
@@ -334,7 +397,11 @@
         let saved = null;
         try { saved = JSON.parse(localStorage.getItem(settingsKey) || "null"); } catch (_) {}
         $("remember-settings").checked = saved?.remember === true;
-        pairs = (saved?.remember && Array.isArray(saved.pairs) ? saved.pairs : result.pairs)
+        // Template values shipped in the sample config must show as watermarks, not real text.
+        const isTemplateValue = (value) => /^(source|target)$/i.test(String(value || "").trim());
+        const configuredPairs = (result.pairs || []).filter((item) =>
+          !isTemplateValue(item.Source) && !isTemplateValue(item.Target));
+        pairs = (saved?.remember && Array.isArray(saved.pairs) ? saved.pairs : configuredPairs)
           .slice(0, result.maxPairs)
           .map((item) => {
             const configuredPair = (result.pairs || []).find((candidate) =>
@@ -344,9 +411,9 @@
               ? item.MigrationMode
               : configuredPair?.MigrationMode === "SchemaOnly" ? "SchemaOnly" : "Full";
             return {
-              Source: item.Source || "",
-              Target: item.Target || "",
-              BackupPath: item.BackupPath || "",
+              Source: isTemplateValue(item.Source) ? "" : item.Source || "",
+              Target: isTemplateValue(item.Target) ? "" : item.Target || "",
+              BackupPath: /backup-share/i.test(item.BackupPath || "") ? "" : item.BackupPath || "",
               MigrationMode: migrationMode,
               databases: null
             };
@@ -710,7 +777,7 @@
         for (const [key, caption] of [
           ["Source", "Source SQL instance"],
           ["Target", "Target SQL instance"],
-          ["BackupPath", "Shared backup directory (UNC path)"]
+          ["BackupPath", "Shared backup directory (UNC path) - needed only to migrate"]
         ]) {
           const wrapper = document.createElement("div");
           const label = document.createElement("label");
@@ -723,6 +790,8 @@
           input.dataset.field = key;
           input.value = pair[key];
           input.disabled = Boolean(pair.validationRunning);
+          input.setAttribute("list", key === "BackupPath" ? "history-paths" : "history-servers");
+          input.autocomplete = "off";
           input.placeholder = key === "BackupPath" ? "\\\\backup-server\\sql-migrations\\instance" :
             (key === "Source" ? "hostname\\instance or 10.0.0.20,1433" : "hostname\\instance or 10.0.0.30,1433");
           wrapper.append(label, input);
@@ -1073,6 +1142,38 @@
 
     $("pair-list").addEventListener("change", (event) => {
       const target = event.target;
+      const field = target.closest?.("[data-field]");
+      if (field) {
+        const pair = pairs[Number(field.dataset.pairIndex)];
+        const card = field.closest(".pair-card");
+        const key = field.dataset.field;
+        if (key !== "BackupPath" && field.value.trim()) {
+          const value = field.value.trim().toLowerCase();
+          const known = loadHistory().pairs.find((x) =>
+            String(key === "Source" ? x.Source : x.Target).toLowerCase() === value);
+          if (known) {
+            // Autofill only the still-empty companion fields from the last pair that used this server.
+            const fills = key === "Source"
+              ? { Target: known.Target, BackupPath: known.BackupPath }
+              : { Source: known.Source, BackupPath: known.BackupPath };
+            for (const [name, fillValue] of Object.entries(fills)) {
+              if (pair[name] || !fillValue) continue;
+              pair[name] = fillValue;
+              const companion = card.querySelector(`[data-field="${name}"]`);
+              if (companion) companion.value = fillValue;
+            }
+            if (!pair.MigrationMode || pair.MigrationMode === "Full") {
+              pair.MigrationMode = known.MigrationMode === "SchemaOnly" ? "SchemaOnly" : "Full";
+              const modeSelect = card.querySelector("[data-mode]");
+              if (modeSelect) modeSelect.value = pair.MigrationMode;
+            }
+            refreshCustomSqlPairs();
+            saveSettings();
+          }
+        }
+        recordPairHistory(pair);
+        return;
+      }
       if (target.matches("[data-mode]")) {
         const pairIndex = Number(target.dataset.pairIndex);
         const pair = pairs[pairIndex];
@@ -1104,6 +1205,20 @@
     });
 
     $("remember-settings").addEventListener("change", saveSettings);
+    $("standalone-sql-instance").setAttribute("list", "history-servers");
+    $("standalone-sql-instance").autocomplete = "off";
+    $("patch-update-path").setAttribute("list", "history-paths");
+    $("patch-update-path").autocomplete = "off";
+    $("standalone-sql-instance").addEventListener("change", (event) =>
+      recordHistory({ servers: [event.target.value] }));
+    $("patch-update-path").addEventListener("change", (event) =>
+      recordHistory({ paths: [event.target.value] }));
+    renderHistoryLists();
+    $("clear-history").addEventListener("click", (event) => {
+      event.preventDefault();
+      try { localStorage.removeItem(historyKey); } catch (_) {}
+      renderHistoryLists();
+    });
     document.querySelectorAll("[data-option]").forEach((checkbox) =>
       checkbox.addEventListener("change", () => {
         if (checkbox.dataset.option === "SkipLinkedServers") {
@@ -1322,6 +1437,12 @@
         }))
       }));
       const selectedCount = planPairs.reduce((sum, pair) => sum + pair.Databases.length, 0);
+      const missingBackupPath = pairs.find((pair) => pair.databases && !String(pair.BackupPath || "").trim());
+      if (missingBackupPath) {
+        $("migration-error").textContent =
+          `Enter the shared backup directory for ${missingBackupPath.Source || "pair"} → ${missingBackupPath.Target || ""} before migrating.`;
+        return;
+      }
       const overwriteList = planPairs.flatMap((pair) => pair.Databases
         .filter((database) => database.Overwrite)
         .map((database) => `${pair.Source} → ${pair.Target}: ${database.Database}`));

@@ -290,6 +290,25 @@ Describe 'Web patch target resolution' {
     }
 }
 
+Describe 'Web pair backup path requirement' {
+    BeforeAll {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PSScriptRoot '..\Invoke-DbMigrationWeb.ps1'), [ref]$null, [ref]$null)
+        $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'ConvertTo-WebPairs' }, $true)
+        . ([scriptblock]::Create($fn.Extent.Text))
+    }
+
+    It 'allows discovery without a backup path' {
+        $pair = @(ConvertTo-WebPairs -Pairs @(@{ Source = 'a'; Target = 'b'; BackupPath = '' }))[0]
+        $pair.BackupPath | Should -Be ''
+    }
+
+    It 'requires a backup path when migrating' {
+        { ConvertTo-WebPairs -Pairs @(@{ Source = 'a'; Target = 'b'; BackupPath = '' }) -RequireBackupPath } |
+            Should -Throw '*BackupPath*'
+    }
+}
+
 Describe 'SQL Server patch helper' {
     BeforeAll {
         Import-Module dbatools -ErrorAction Stop

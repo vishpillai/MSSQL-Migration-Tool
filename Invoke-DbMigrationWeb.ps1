@@ -514,8 +514,7 @@ function Get-WebPairKey {
     param([Parameter(Mandatory)][System.Collections.IDictionary] $Pair)
     $identity = [string]::Join([char]0, @(
         ([string]$Pair.Source).Trim().ToLowerInvariant(),
-        ([string]$Pair.Target).Trim().ToLowerInvariant(),
-        ([string]$Pair.BackupPath).Trim().ToLowerInvariant()
+        ([string]$Pair.Target).Trim().ToLowerInvariant()
     ))
     [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData(
         [System.Text.Encoding]::UTF8.GetBytes($identity)
@@ -523,7 +522,10 @@ function Get-WebPairKey {
 }
 
 function ConvertTo-WebPairs {
-    param([Parameter(Mandatory)][object[]] $Pairs)
+    param(
+        [Parameter(Mandatory)][object[]] $Pairs,
+        [Parameter()][switch] $RequireBackupPath
+    )
     if ($Pairs.Count -lt 1 -or $Pairs.Count -gt 3) {
         throw [ArgumentException]::new('Enter between one and three source/target pairs.')
     }
@@ -533,18 +535,20 @@ function ConvertTo-WebPairs {
         if ($pair -isnot [System.Collections.IDictionary]) {
             throw [ArgumentException]::new('Each instance entry must contain source, target, and backup path values.')
         }
-        foreach ($name in @('Source', 'Target', 'BackupPath')) {
+        $requiredNames = if ($RequireBackupPath) { @('Source', 'Target', 'BackupPath') } else { @('Source', 'Target') }
+        foreach ($name in $requiredNames) {
             if (-not $pair.Contains($name) -or [string]::IsNullOrWhiteSpace([string]$pair[$name])) {
-                throw [ArgumentException]::new("Each instance entry must include a non-empty '$name'.")
+                throw [ArgumentException]::new("Each instance entry must include a non-empty '$name'.$(if ($name -eq 'BackupPath') { ' A shared backup path is required to migrate.' })")
             }
         }
-        if (-not [System.IO.Path]::IsPathRooted(([string]$pair.BackupPath).Trim())) {
+        $rawBackupPath = if ($pair.Contains('BackupPath')) { ([string]$pair.BackupPath).Trim() } else { '' }
+        if ($rawBackupPath -and -not [System.IO.Path]::IsPathRooted($rawBackupPath)) {
             throw [ArgumentException]::new('Backup paths must be absolute local or UNC paths.')
         }
         $normalizedPair = @{
             Source = ([string]$pair.Source).Trim()
             Target = ([string]$pair.Target).Trim()
-            BackupPath = [System.IO.Path]::GetFullPath(([string]$pair.BackupPath).Trim())
+            BackupPath = if ($rawBackupPath) { [System.IO.Path]::GetFullPath($rawBackupPath) } else { '' }
             MigrationMode = if ($pair.Contains('MigrationMode')) { [string]$pair.MigrationMode } else { 'Full' }
         }
         if ($normalizedPair.MigrationMode -notin @('Full', 'SchemaOnly')) {
@@ -579,7 +583,7 @@ function Start-WebMigrationPlan {
         -not $Body.Contains('Options') -or $Body.Options -isnot [System.Collections.IDictionary]) {
         throw [ArgumentException]::new('Pairs and Options are required.')
     }
-    $pairs = @(ConvertTo-WebPairs -Pairs $Body.Pairs)
+    $pairs = @(ConvertTo-WebPairs -Pairs $Body.Pairs -RequireBackupPath)
     $optionNames = @(
         'MigrateLogins', 'MigrateAgentJobs', 'MigrateAgentOperators',
         'ConfigureLinkedServers', 'SkipLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics'
@@ -597,9 +601,8 @@ function Start-WebMigrationPlan {
             throw [ArgumentException]::new("Run discovery for '$($pair.Source)' -> '$($pair.Target)' before starting migration.")
         }
         $discovery = $script:DiscoveryByPair[$pairKey]
-        if ($discovery.Pair.Source -cne $pair.Source -or $discovery.Pair.Target -cne $pair.Target -or
-            $discovery.Pair.BackupPath -cne $pair.BackupPath) {
-            throw [ArgumentException]::new('A source, target, or backup path changed after discovery. Run discovery again.')
+        if ($discovery.Pair.Source -cne $pair.Source -or $discovery.Pair.Target -cne $pair.Target) {
+            throw [ArgumentException]::new('A source or target changed after discovery. Run discovery again.')
         }
         if (-not $pair.Contains('Databases') -or $pair.Databases -isnot [array]) {
             throw [ArgumentException]::new('Each pair must include a database selection array.')

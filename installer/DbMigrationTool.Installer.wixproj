@@ -8,8 +8,4 @@
     <UpgradeCode>5D339A8D-CA1E-45D4-A266-4F0812FE5981</UpgradeCode>
     <Version>1.0.0.0</Version>
   </PropertyGroup>
-
-  <ItemGroup>
-    <Compile Include="Product.wxs" />
-  </ItemGroup>
 </Project>
