@@ -39,6 +39,7 @@ function Get-MigrationSqlServerPatchCatalog {
         @{ MajorVersion = 'SQL2016'; ServicePacks = @('SP2', 'SP3') }
         @{ MajorVersion = 'SQL2019'; ServicePacks = @('RTM') }
         @{ MajorVersion = 'SQL2022'; ServicePacks = @('RTM') }
+        @{ MajorVersion = 'SQL2025'; ServicePacks = @('RTM') }
     )
     $catalog = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
