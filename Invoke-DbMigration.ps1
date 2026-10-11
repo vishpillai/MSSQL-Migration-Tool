@@ -165,6 +165,35 @@ foreach ($pair in $configuration.SourceTargets) {
                 }
                 if ($ProgressPath) {
                     Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
+                        -Database $database.Name -Stage 'TDEPreflight' -Status 'Started' `
+                        -Message 'Checking source TDE encryption and target encryptor readiness.'
+                }
+                try {
+                    $tdeReadiness = Test-MigrationTdeReadiness -Source $pair.Source -Target $pair.Target `
+                        -Database $database.Name -MigrationMode ([string]$pair.MigrationMode)
+                    $migrationResults.Add($tdeReadiness)
+                    if ($ProgressPath) {
+                        $tdeStatus = if ($tdeReadiness.Status -eq 'Passed') { 'Completed' } else { 'Failed' }
+                        Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
+                            -Database $database.Name -Stage 'TDEPreflight' -Status $tdeStatus -Message $tdeReadiness.Message
+                    }
+                    if ($tdeReadiness.Status -ne 'Passed') {
+                        continue
+                    }
+                }
+                catch {
+                    $migrationResults.Add([pscustomobject]@{
+                        Source = $pair.Source; Target = $pair.Target; Database = $database.Name
+                        Stage = 'TDEPreflight'; Status = 'Failed'; Message = $_.Exception.Message
+                    })
+                    if ($ProgressPath) {
+                        Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
+                            -Database $database.Name -Stage 'TDEPreflight' -Status 'Failed' -Message $_.Exception.Message
+                    }
+                    continue
+                }
+                if ($ProgressPath) {
+                    Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
                         -Database $database.Name -Stage 'CapacityPreflight' -Status 'Started' -Message 'Checking target data and log capacity.'
                 }
                 $capacity = Test-MigrationRestoreCapacity -Source $pair.Source -Target $pair.Target -Database $database.Name -BufferPercent ([double]$configuration.RestoreSpaceBufferPercent)
@@ -232,7 +261,14 @@ foreach ($pair in $configuration.SourceTargets) {
         }
     }
     if ($configuration.ConfigureLinkedServers) {
-        $serverSteps += @{ Name = 'LinkedServers'; Action = { Invoke-LinkedServerConfiguration -Pair $pair -CsvPath $configuration.LinkedServersCsv } }
+        $linkedServersCsvPath = if ($pair.Contains('LinkedServersCsv') -and
+            -not [string]::IsNullOrWhiteSpace([string]$pair.LinkedServersCsv)) {
+            [string]$pair.LinkedServersCsv
+        }
+        else {
+            [string]$configuration.LinkedServersCsv
+        }
+        $serverSteps += @{ Name = 'LinkedServers'; Action = { Invoke-LinkedServerConfiguration -Pair $pair -CsvPath $linkedServersCsvPath } }
     }
     foreach ($serverStep in $serverSteps) {
         try {

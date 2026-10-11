@@ -236,6 +236,109 @@ function Invoke-MigrationCustomSql {
     Invoke-MigrationCustomSqlInternal -SqlInstance $SqlInstance -Database $Database -Query $trimmedQuery
 }
 
+function Invoke-MigrationCustomSqlBatch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $SqlInstances,
+        [Parameter()][string] $Database = 'master',
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Query
+    )
+
+    $normalizedInstances = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in $SqlInstances) {
+        if ([string]::IsNullOrWhiteSpace($entry)) {
+            throw 'SQL instance names cannot be empty.'
+        }
+        foreach ($instance in ($entry -split ',(?=\s*(?!\d+\s*(?:,|$))\S)')) {
+            $trimmedInstance = $instance.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($trimmedInstance)) {
+                $normalizedInstances.Add($trimmedInstance)
+            }
+        }
+    }
+    if ($normalizedInstances.Count -eq 0) {
+        throw 'At least one SQL instance is required.'
+    }
+    if ([string]::IsNullOrWhiteSpace($Query)) {
+        throw 'Custom T-SQL query cannot be empty.'
+    }
+    if ([string]::IsNullOrWhiteSpace($Database)) {
+        $Database = 'master'
+    }
+
+    $trimmedQuery = $Query.Trim()
+    $seenInstances = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $results = [System.Collections.Generic.List[object]]::new()
+    foreach ($sqlInstance in $normalizedInstances) {
+        if (-not $seenInstances.Add($sqlInstance)) {
+            continue
+        }
+
+        $startedAt = [DateTime]::UtcNow
+        try {
+            $rows = @(Invoke-MigrationCustomSql -SqlInstance $sqlInstance -Database $Database -Query $trimmedQuery)
+            $results.Add([pscustomobject]@{
+                SqlInstance = $sqlInstance
+                Succeeded = $true
+                Rows = $rows
+                Error = $null
+                ElapsedMilliseconds = [int](([DateTime]::UtcNow - $startedAt).TotalMilliseconds)
+            })
+        }
+        catch {
+            $results.Add([pscustomobject]@{
+                SqlInstance = $sqlInstance
+                Succeeded = $false
+                Rows = @()
+                Error = $_.Exception.Message
+                ElapsedMilliseconds = [int](([DateTime]::UtcNow - $startedAt).TotalMilliseconds)
+            })
+        }
+    }
+    return $results.ToArray()
+}
+
+function Get-MigrationDiskUsage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $SqlInstance
+    )
+
+    $SqlInstance = $SqlInstance.Trim()
+    if ([string]::IsNullOrWhiteSpace($SqlInstance)) {
+        throw 'SqlInstance is required.'
+    }
+
+    $connection = Connect-DbaInstance -SqlInstance $SqlInstance -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace([string]$connection.ComputerName)) {
+        throw "Could not resolve the Windows host for SQL instance '$SqlInstance'."
+    }
+    $computerName = [string]$connection.ComputerName
+    $disks = @(Get-DbaDiskSpace -ComputerName $computerName -Unit GB -EnableException -ErrorAction Stop)
+    foreach ($disk in $disks) {
+        $volume = [string]$disk.Name
+        if ([string]::IsNullOrWhiteSpace($volume)) {
+            throw "Disk inventory for '$computerName' returned a volume without a name."
+        }
+        $sizeGB = [double]$disk.SizeInGB
+        $freeGB = [double]$disk.FreeInGB
+        if ([double]::IsNaN($sizeGB) -or [double]::IsInfinity($sizeGB) -or $sizeGB -le 0 -or
+            [double]::IsNaN($freeGB) -or [double]::IsInfinity($freeGB) -or $freeGB -lt 0 -or $freeGB -gt $sizeGB) {
+            throw "Disk inventory for '$computerName' returned invalid capacity values for '$volume'."
+        }
+        $usedGB = $sizeGB - $freeGB
+        [pscustomobject]@{
+            SqlInstance = $SqlInstance
+            ComputerName = $computerName
+            Volume = $volume
+            SizeGB = [math]::Round($sizeGB, 2)
+            FreeGB = [math]::Round($freeGB, 2)
+            UsedGB = [math]::Round($usedGB, 2)
+            PercentUsed = [math]::Round(($usedGB / $sizeGB) * 100, 1)
+        }
+    }
+}
+
 function Invoke-MigrationCustomSqlInternal {
     [CmdletBinding()]
     param(
@@ -807,4 +910,4 @@ function Write-MigrationReports {
     [pscustomobject]@{ CsvPath = $csvPath; HtmlPath = $htmlPath }
 }
 
-Export-ModuleMember -Function Import-MigrationConfiguration, Get-MigrationTargetDatabaseDecision, Get-MigrationSourceTargetPairDefaults, Test-MigrationServerWorkEnabled, Get-MigrationDatabase, Test-MigrationDatabaseExists, Invoke-MigrationCustomSql, Get-MigrationState, Get-MigrationStateKey, Get-MigrationBackupPath, Get-MigrationRunBackupDirectory, Get-MigrationDatabaseBackupDirectory, Get-MigrationBackupStripeFiles, Write-MigrationProgressEvent, Wait-MigrationControl, Remove-MigrationRunBackupDirectory, Set-MigrationState, Write-MigrationReports
+Export-ModuleMember -Function Import-MigrationConfiguration, Get-MigrationTargetDatabaseDecision, Get-MigrationSourceTargetPairDefaults, Test-MigrationServerWorkEnabled, Get-MigrationDatabase, Test-MigrationDatabaseExists, Invoke-MigrationCustomSql, Invoke-MigrationCustomSqlBatch, Get-MigrationDiskUsage, Get-MigrationState, Get-MigrationStateKey, Get-MigrationBackupPath, Get-MigrationRunBackupDirectory, Get-MigrationDatabaseBackupDirectory, Get-MigrationBackupStripeFiles, Write-MigrationProgressEvent, Wait-MigrationControl, Remove-MigrationRunBackupDirectory, Set-MigrationState, Write-MigrationReports

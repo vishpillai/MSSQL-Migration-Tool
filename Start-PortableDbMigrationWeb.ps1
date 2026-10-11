@@ -3,7 +3,7 @@ param(
     [Parameter()][string] $HostName = 'localhost',
     [Parameter()][ValidateRange(1, 65535)][int] $Port = 9080,
     [Parameter()][string] $Username = 'migration-admin',
-    [Parameter()][string] $Password = 'MigrationAdmin123!',
+    [Parameter()][string] $Password,
     [Parameter()][string] $AppRoot = $PSScriptRoot
 )
 
@@ -32,6 +32,20 @@ function Get-FreeTcpPort {
 }
 
 Import-Module (Join-Path $AppRoot 'src\DbMigration.WebAuth.psm1') -Force
+
+function New-InitialPortablePassword {
+    $randomBytes = [byte[]]::new(32)
+    $randomNumberGenerator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $randomNumberGenerator.GetBytes($randomBytes)
+    }
+    finally {
+        $randomNumberGenerator.Dispose()
+    }
+
+    [Convert]::ToBase64String($randomBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
 $existingInstance = $null
 if ([System.Threading.Mutex]::TryOpenExisting('Global\DbMigrationToolWebHost', [ref]$existingInstance)) {
     $existingInstance.Dispose()
@@ -59,9 +73,16 @@ $storage = Resolve-MigrationWebStoragePaths -AppRoot $AppRoot -PortableMode
 
 if (-not (Test-Path -LiteralPath $storage.AuthPath -PathType Leaf)) {
     $null = New-Item -ItemType Directory -Path $storage.AuthDirectory -Force -ErrorAction Stop
+    $generatedPassword = [string]::IsNullOrEmpty($Password)
+    if ($generatedPassword) {
+        $Password = New-InitialPortablePassword
+    }
     $securePassword = ConvertTo-SecureString -String $Password -AsPlainText -Force
     $record = New-MigrationWebPasswordRecord -Username $Username -Password $securePassword
     $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $storage.AuthPath -Encoding utf8
+    if ($generatedPassword) {
+        Write-Host "Initial portable login (shown once; save it securely):`nUsername: $Username`nPassword: $Password"
+    }
     Write-Host "Portable auth file created at $($storage.AuthPath)"
 }
 

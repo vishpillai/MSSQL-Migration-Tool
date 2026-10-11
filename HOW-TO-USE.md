@@ -13,6 +13,7 @@ Before running the tool, make sure you have:
 - Network access from the migration host to the source and target SQL Server instances
 - SQL permissions to:
   - read the source databases
+  - inspect TDE metadata and target key metadata (usually requires `VIEW SERVER STATE`, or `VIEW SERVER PERFORMANCE STATE` on SQL Server 2022)
   - create or restore databases on the target
   - copy server-level objects such as logins, jobs, and operators
   - repair orphaned users and update statistics if enabled
@@ -92,15 +93,47 @@ What each mode does:
 - `Validate`: checks connectivity, version compatibility, and backup-share visibility from source and target SQL Server services
 - `Migrate`: performs the backup/restore workflow, post-migration tasks, and report generation
 
-The migration preflight compares allocated source data/log file sizes plus the configured buffer to free space on the target's default data/log volumes. It is an estimate, so check for concurrent storage use and expected growth as well. A database is not marked complete until it is confirmed visible, online, and accessible on the target. The GUI reports live database-stage and server-object events in its progress panel and log, including failures. For each selected database already on the target, the GUI asks whether to overwrite it; choosing No skips that database and leaves the existing target untouched. Command-line replacement still requires explicit `AllowTargetReplace` approval.
+The migration preflight compares allocated source data/log file sizes plus the configured buffer to free space on the target's default data/log volumes. It checks source TDE status and, for full migrations of encrypted databases, verifies that the target has the matching private-key certificate or asymmetric key before creating a backup. It also checks whether source full-text indexes or dependent modules require Full-Text Search; if so, migration is blocked before backup or target replacement unless that SQL Server feature is installed on the target. If a TDE key is missing or a required feature cannot be verified, that database is blocked before transfer. Discovery displays TDE state and target-key readiness. Schema-only migrations report TDE but do not require the target key because they do not restore an encrypted database backup. These checks do not export or transfer private keys. Capacity remains an estimate, so check for concurrent storage use and expected growth. A database is not marked complete until it is confirmed visible, online, and accessible on the target. The GUI reports live database-stage and server-object events in its progress panel and log, including failures. For each selected database already on the target, the GUI asks whether to overwrite it; choosing No skips that database and leaves the existing target untouched. Command-line replacement still requires explicit `AllowTargetReplace` approval.
 
 Each source/target run writes checksummed, compressed, verified full-copy-only backups, striped across `BackupFileCount` files, into a unique per-run folder with a separate child directory for each database. Restore is given only the selected database's stripe files to prevent parallel restores from scanning or locking other databases' files. The run folder is removed only when every enabled migration stage succeeds. If any step fails, the folder is retained for troubleshooting/retry; after a successful retry, retained run folders referenced by the selected database state are removed. This is temporary migration staging, not a backup-retention strategy—keep separate durable backups if recovery policy requires them.
 
-## 5. Supported install path and current status
+If a target data or log file already exists on the target host but is not owned by a database on the selected SQL instance, migration retries with unique destination filenames only when the target database does not already exist. The file already on disk is not overwritten. Other restore failures and conflicts during an approved replacement are reported without retry.
 
-The verified and supported installation method is the Windows app bundle created by `Install-DbMigrationWeb.ps1`. For a first-time current-user installation, start with `Setup-DbMigrationTool.cmd`; it bootstraps PowerShell 7.2+ through winget if missing, then installs dbatools from PowerShell Gallery only if missing. Internet access is needed only when a dependency is absent. It creates a stable app folder, desktop shortcut, and Start menu entry and has been validated by the automated test suite (55 passing tests).
+Schema-only targets use unique data/log filenames to avoid orphaned-file collisions. If a schema copy fails after creating a new target database, that incomplete database is removed so a later retry is not blocked by a partial target.
 
-A WiX-based MSI/EXE packaging prototype is still under development and remains a separate engineering task. It is not the current recommended distribution path for production use.
+## 5. Install or create a portable package
+
+For a conventional current-user installation with shortcuts, start with `Setup-DbMigrationTool.cmd`. It installs PowerShell 7.2+ through winget when missing, then installs dbatools from PowerShell Gallery only if it is missing. The setup downloads are only for missing prerequisites. System-wide installation requires elevation.
+
+To create a clean folder for copying to another Windows device, run this from the repository root:
+
+```powershell
+pwsh -NoProfile -File .\installer\Build-Installer.ps1 -StageOnly
+```
+
+The output is `installer\obj\staging`. Its root contains:
+
+- `Start-DbMigrationWeb.cmd` — double-click launcher
+- `Start-DbMigrationWeb.ps1` — checks PowerShell and ensures dbatools is installed
+- `Install-DbMigrationPrerequisites.ps1` — prerequisite setup script
+- `App\` — application scripts, PowerShell modules, configuration, web UI, and portable data folders
+
+Development tests, repository metadata, and documentation are not included in the staged runtime. Create a ZIP from the stage with:
+
+```powershell
+New-Item -ItemType Directory -Path .\installer\bin -Force | Out-Null
+Compress-Archive -Path .\installer\obj\staging\* -DestinationPath .\installer\bin\DbMigrationTool-Portable.zip -Force
+```
+
+On the destination Windows device, install PowerShell 7.2+ and make sure `pwsh.exe` is available on `PATH`, then extract the entire ZIP into a writable folder and run `Start-DbMigrationWeb.cmd`. dbatools is installed for the current user on first launch if it is missing. No SQL Server is bundled; the host still needs network access, SQL permissions, and access to any required backup shares. This package is a portable app folder, not a self-contained EXE.
+
+Portable authentication and logs are saved under `App\portable`. Copying a folder after first launch copies its authentication record too. To create a fresh login on the destination, run this from the extracted package root:
+
+```powershell
+pwsh -NoProfile -File .\App\Initialize-DbMigrationWebAuth.ps1 -PortableMode -AppRoot .\App
+```
+
+The WiX MSI can be built with `pwsh -NoProfile -File .\installer\Build-Installer.ps1`; it remains experimental. Use `-StageOnly` to regenerate the portable folder without building an MSI.
 
 ## 6. Run the GUI
 
@@ -125,6 +158,8 @@ Important: the GUI intentionally uses the first configured source/target pair fr
 
 ## 7. Run the browser interface
 
+At the application sign-in screen, select **Remember username on this device** to prefill the username on the next visit. This stores only the username in that browser's local storage; it does not store the password or keep the authenticated session alive. Uncheck the option to remove the saved username.
+
 There are two supported browser modes:
 
 - Server-hosted HTTPS mode for network deployment on a Windows migration server.
@@ -138,12 +173,9 @@ For a local, portable run without machine-level HTTPS registration, use the laun
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\Start-PortableDbMigrationWeb.ps1
 ```
 
-This starts the app on a loopback address such as `http://localhost:9080/` or the next available free local port. It stores auth and logs under the project folder (`portable\auth\auth.json` and `portable\logs`). The default portable credentials are:
+This starts the app on a loopback address such as `http://localhost:9080/` or the next available free local port. It stores auth and logs under the project folder (`portable\auth\auth.json` and `portable\logs`). On first launch, a unique strong password is generated and displayed once in the console; save it securely before closing the window. The default username is `migration-admin`.
 
-- Username: `migration-admin`
-- Password: `MigrationAdmin123!`
-
-The launcher automatically creates the authentication file on first run if it is missing.
+The launcher automatically creates the authentication file on first run if it is missing. To set a new password later, run `Initialize-DbMigrationWebAuth.ps1 -PortableMode`.
 
 ### Server-hosted HTTPS mode
 
@@ -183,9 +215,27 @@ Windows mode requires HTTPS, a domain service account, and an HTTP SPN for the h
 
 The setup prompts for the app password (at least 14 characters) and stores only a salted PBKDF2 hash. Open `https://db-migration.contoso.com:8443/` from an authorized client. Restrict the server firewall to intended client systems. SQL Server, backup-share, reports, and migration state operations use the Windows identity running the host; browser users do not delegate their own Windows credentials. Use a least-privilege host identity. Anyone with the dedicated app login can operate all source/target pairs in the configuration.
 
-The browser UI has fields for source SQL instance, target SQL instance, and shared backup directory (use the UNC path visible to both SQL Server service accounts). Enter a hostname, `HOST\INSTANCE`, IP address, and shared path manually. Choose **Validate pair** to check SQL connectivity, supported SQL versions, and whether both SQL Server services can access the shared path. Choose **Discover databases** for pair inventory and capacity preflight. For one-off work without a migration pair, use **Individual SQL instance** in the T-SQL workspace: validate/discover the entered server, then query its selected database or add it as a standalone patch target. Validation results are cleared when endpoint values change. Add up to three migration pairs. Select **Remember source, target, and shared backup paths in this browser** to save those connection settings in that browser's local storage; uncheck it to remove the saved settings. This does not write endpoint changes to `config/migration.config.json`.
+The browser UI has fields for source SQL instance, target SQL instance, and shared backup directory (use the UNC path visible to both SQL Server service accounts). Enter a hostname, `HOST\INSTANCE`, IP address, and shared path manually. Choose **Validate pair** to check SQL connectivity, supported SQL versions, and whether both SQL Server services can access the shared path. Choose **Discover databases** for pair inventory and capacity preflight. For one-off work without a migration pair, use **Individual SQL instance** in the T-SQL workspace: validate/discover the entered server, then query its selected database or add it as a standalone patch target. Choose **Any SQL instances (multiple)** to enter any reachable SQL Server names one per line or comma-separated, independent of configured pairs. A `host,port` entry remains one server. The same database and statement run sequentially on each server; results and failures are reported per server, and one failure does not stop later targets. Confirm the target list and statement carefully before running. Validation results are cleared when endpoint values change. Add up to three migration pairs. Select **Remember source, target, and shared backup paths in this browser** to save those connection settings in that browser's local storage; uncheck it to remove the saved settings. This does not write endpoint changes to `config/migration.config.json`.
+
+Use **Disk usage** in the workspace navigation to check one or more SQL Server hosts, independent of configured migration pairs. Enter SQL instances one per line or comma-separated; `host,port` remains one endpoint. The app connects to each SQL instance to resolve its Windows host, then reads volume size and free space through dbatools. Results show used/free GB and a graphical utilization bar per volume, with warning colors at 80% and 90%. Checks continue for other servers if one fails. The web host's Windows identity must have SQL connectivity and permission to read remote disk inventory (including any required Windows remote-management firewall and authorization settings). No credentials are requested or stored by this view.
 
 Discover each pair, select its databases, and review overwrite approvals. The browser workflow runs the pairs sequentially, and each pair's selected databases one at a time. For each database, it runs validation and capacity preflight, performs the backup and restore, verifies target access, runs selected post-migration checks, and deletes that database's temporary backup folder before starting the next database. Server-level objects run after that pair's databases and before the next pair. A failed validation, migration, post-migration action, backup cleanup, or server-object stage stops the sequence; it does not advance to the next database or pair. The command-line and desktop GUI workflows retain their configured concurrency behavior.
+
+The **Live migration monitor** shows the current database and source/target pair, stage-level percentage when SQL Server reports it, and an overall completed-job percentage. Job counts distinguish completed, skipped, in-progress, pending, and failed databases. The monitor refreshes every second; stage percentage is unavailable for work that does not expose SQL Server progress, while job counts still update as database outcomes arrive.
+
+Select **Logs & audit** in the top navigation to open the separate reporting view; it is hidden from the main workspace by default. Review migration CSV summaries, source user/login, SQL Agent job, and linked-server inventory counts alongside their migration-stage status, durable patch summaries, audit events, and recent application/run logs. Counts are read from the latest matching discovery report, so run discovery first for current inventory. Use **Refresh reports** after an operation completes; **Export snapshot (JSON)** downloads the reporting data. The audit view supports server-side free-text, actor, category, severity, outcome, and UTC date filtering; it reports the total match count and returns at most the newest 500 matching events per query. **Export audit (JSON/CSV)** downloads only the current filtered result and includes integrity status; CSV fields are escaped against spreadsheet formula injection.
+
+Audit events include application sign-in outcomes, authorized Windows-authenticated principals observed by the host, Windows group-membership denials, migration/patch launch and lifecycle/control actions, validation and discovery outcomes, rejected API operations, and custom SQL request/completion metadata. Records include actor, UTC timestamp, action, category, severity, outcome, resource, client address, request ID, and run ID where applicable. Passwords and custom SQL text are never recorded. Events are HMAC-SHA256 chained and a signed head checkpoint detects truncation; the HMAC key is protected by Windows DPAPI for the current Windows account. The server verifies the chain and labels older unchained entries as legacy. A damaged chain/checkpoint or unavailable key is surfaced as an integrity error and blocks further audit appends.
+
+This integrity control is tamper-evident, not immutable: someone able to run the app as its host account can produce valid events, while a privileged administrator can replace the log, checkpoint, and key. Do not edit or truncate audit files. Keep `Audit.jsonl`, `Audit.jsonl.head`, and `Audit.key` together. Restrict the host log directory to the dedicated host identity and authorized administrators, protect backups, and forward/archive records to a separately administered immutable or write-once system. The log contains user names, client IP addresses, server/database names, and operational metadata; follow organizational access, privacy, retention, and incident-response policies. Standard-mode audit files are in `%LOCALAPPDATA%\DbMigrationWeb\Logs`; portable mode uses its configured portable log directory. Keep the audit key with protected backups and restore it under the same Windows account/profile; a different host account may not be able to verify the existing chain.
+
+### Remap linked servers to replacement instances
+
+Linked-server configuration is skipped by default. To configure linked servers during a browser migration, clear **Skip linked servers for this run**, select **Configure linked servers**, then load definitions separately for each source/target pair. Review every row and change **Data source** (and catalog, if needed) to the replacement endpoint. Definitions can also be added manually. Inventory contains linked-server metadata only; SQL Server does not make saved remote passwords recoverable.
+
+For `SpecifiedSecurityContext` (SQL authentication), enter the remote login and its current password for the destination. Passwords are collected only for the current run, are not written to browser storage, plan JSON, reports, or the generated CSV, and are cleared from the form after submission. The host passes them to the migration worker through per-run environment variables. Use HTTPS in server-hosted mode; portable local mode binds to loopback. Use `CurrentSecurityContext` only when the destination supports the Windows identity used by the migration host.
+
+The source inventory reports when it finds multiple or login-specific linked-login mappings. The browser workflow configures one mapping per linked server; review those warnings and recreate any additional per-login mappings separately on the target. A linked server with the same name already present on a target is left unchanged rather than overwritten, so verify the target definition before the run or update it separately. A failed linked-server configuration stops the migration sequence and is reported in the run results.
 
 ### Patch selected SQL instances
 
@@ -195,7 +245,13 @@ Expand **Patch selected SQL instances**, select endpoints, and choose **Refresh 
 
 Choose **Apply eligible instances** to patch only the currently assessed eligible rows. Selected instances run sequentially and stop at the first failure. SQL Server services may restart as part of patch installation. Restarting the Windows host is a separate option and is off by default. This workflow rejects clustered SQL Server instances; use a cluster-aware patch procedure for those systems. For remote targets, the app identity needs the remote administration permissions required by dbatools and PowerShell remoting. Do not run a patch during a migration, and schedule a maintenance window before starting.
 
-The browser UI shows discovery metadata, a full-data/schema-only mode for every pair, per-database overwrite checkboxes and confirmations, migration options, live run and per-step percentages, and Pause, Resume, and Stop controls. A selected existing target without explicit overwrite approval is skipped. Schema-only mode scripts database objects without copying table data and does not copy linked servers or other server-level objects. An approved schema-only overwrite drops and recreates the existing target database, deleting its data; review each overwrite decision before starting. Linked-server configuration is skipped by default for the entire run; to honor an explicit skip request, leave “Skip linked servers for this run” checked. Pause takes effect at the next safe stage boundary; Resume continues the run. Stop allows the active database or server-object stage to finish safely before preventing later work. Do not stop the web host while the plan is running.
+### Live server monitor
+
+Open **Live server monitor** from the navigation and add one or more SQL hostnames, `HOST\INSTANCE` names, or `HOST,PORT` addresses, or select configured pair endpoints. Select no more than 10 instances and start monitoring for automatic 15-second snapshots. The dashboard graphs SQL/host CPU, system RAM, and disk utilization over the last 20 samples held in browser memory. It also shows SQL memory, page life expectancy, pending memory grants, user sessions, active requests, blocking, data-volume free capacity, per-sample storage I/O latency, and threshold-based pressure alerts. No monitor snapshots are written to application logs, audit logs, or disk. Use **Refresh now** for an immediate snapshot or **Stop monitoring** to end automatic polling. Instance-level connection, query, and permission failures are displayed independently.
+
+When a migration starts, its source and target instances are automatically selected and monitoring starts. Automatic monitoring stops when the migration ends; a manually started monitor continues until stopped. The web host's Windows identity needs SQL connectivity and `VIEW SERVER STATE` for performance and disk metrics; SQL Server 2022 and later may require `VIEW SERVER PERFORMANCE STATE` instead. Grant only the required permissions to the host identity.
+
+The browser UI shows discovery metadata, a full-data/schema-only mode for every pair, per-database overwrite checkboxes and confirmations, migration options, live run and per-step percentages, and Pause, Resume, and Stop controls. Migration setup and patching are independent disclosure panels with separately remembered open/closed states. Collapsing either panel hides only its contents; the workspace's left and right columns and other module positions remain unchanged. Use the Migration and Patching navigation links to open their respective panels. A selected existing target without explicit overwrite approval is skipped. Schema-only mode scripts database objects without copying table data and does not copy linked servers or other server-level objects. An approved schema-only overwrite drops and recreates the existing target database, deleting its data; review each overwrite decision before starting. Linked-server configuration is skipped by default for the entire run; to honor an explicit skip request, leave “Skip linked servers for this run” checked. Pause takes effect at the next safe stage boundary; Resume continues the run. Stop allows the active database or server-object stage to finish safely before preventing later work. Do not stop the web host while the plan is running.
 
 ## 8. Review migration results
 

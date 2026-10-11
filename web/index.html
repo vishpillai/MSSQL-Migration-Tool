@@ -25,21 +25,92 @@
     button:disabled { opacity: .55; cursor: not-allowed; }
     .row { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
     .grow { flex: 1; min-width: 150px; }
-    #application { display: grid; grid-template-areas: "explorer editor" "explorer monitor"; grid-template-columns: minmax(310px, .8fr) minmax(0, 1.8fr); grid-template-rows: minmax(330px, 1.1fr) minmax(240px, .9fr); gap: 7px; min-height: calc(100vh - 76px); }
-    #application > section:first-child { grid-area: explorer; min-height: 0; overflow: auto; }
-    #application > section:nth-child(2) { grid-area: monitor; min-height: 0; }
-    #application > section:nth-child(3) { grid-area: editor; min-height: 0; }
+    #application { display: grid; grid-template-areas: "migration editor" "patch monitor" "disk disk" "live live"; grid-template-columns: minmax(310px, .8fr) minmax(0, 1.8fr); grid-template-rows: auto auto auto auto; align-content: start; gap: 7px; min-height: calc(100vh - 76px); }
+    #application.reports-view { grid-template-areas: "reporting"; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; }
+    #application.reports-view > section:not(#reporting-workspace) { display: none; }
+    #migration-setup { grid-area: migration; min-height: 0; }
+    #migration-monitor { grid-area: monitor; min-height: 0; }
+    #custom-sql-workspace { grid-area: editor; min-height: 0; }
+    #patch-workspace { grid-area: patch; min-width: 0; }
+    #disk-usage-workspace { grid-area: disk; min-width: 0; }
+    #live-server-monitor-workspace { grid-area: live; min-width: 0; }
+    .live-monitor-targets { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px; margin: 12px 0; }
+    .live-monitor-target { display: flex; min-width: 0; align-items: flex-start; gap: 9px; padding: 10px; border: 1px solid #d3dae3; border-radius: 8px; background: #fbfcfe; }
+    .live-monitor-target input { flex: 0 0 auto; width: 16px; min-height: 16px; margin: 2px 0 0; }
+    .live-monitor-target span { min-width: 0; overflow-wrap: anywhere; }
+    .live-monitor-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 12px; margin-top: 14px; }
+    .live-monitor-card { min-width: 0; padding: 14px; border: 1px solid #d3dae3; border-radius: 10px; background: #fbfcfe; }
+    .live-monitor-card h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+    .live-monitor-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+    .live-monitor-card-status { flex: 0 0 auto; padding: 4px 9px; border: 1px solid #cbd5df; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .live-monitor-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+    .live-monitor-metric { min-width: 0; padding: 9px; border: 1px solid #e0e6ed; border-radius: 7px; background: #fff; }
+    .live-monitor-metric strong { display: block; font-size: 17px; overflow-wrap: anywhere; }
+    .live-monitor-metric span { display: block; margin-top: 3px; color: #617184; font-size: 11px; }
+    .live-monitor-card-error { margin-top: 10px; padding: 9px; border: 1px solid #e3aaaa; border-radius: 7px; color: #972d2d; background: #fff0f0; overflow-wrap: anywhere; }
+    .live-monitor-alerts { margin: 10px 0; padding: 10px; border-radius: 7px; background: #f0f7f3; color: #28533b; }
+    .live-monitor-alerts.warning { background: #fff8e8; color: #765100; }
+    .live-monitor-alerts.critical { background: #fff0f0; color: #972d2d; }
+    .live-monitor-gauge { height: 10px; margin: 7px 0 4px; overflow: hidden; border: 1px solid #c6d0dc; border-radius: 6px; background: #e8edf2; }
+    .live-monitor-gauge-fill { height: 100%; width: 0; background: #16834a; transition: width .2s ease; }
+    .live-monitor-gauge-fill.warning { background: #d28a00; }
+    .live-monitor-gauge-fill.critical { background: #c43d3d; }
+    .live-monitor-trends { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 12px 0; }
+    .live-monitor-trend { min-width: 0; padding: 9px; border: 1px solid #e0e6ed; border-radius: 7px; background: #fff; }
+    .live-monitor-trend strong { display: block; font-size: 12px; }
+    .live-monitor-sparkline { display: flex; height: 48px; align-items: end; gap: 2px; margin-top: 7px; }
+    .live-monitor-sparkline span { flex: 1; min-width: 2px; border-radius: 2px 2px 0 0; background: #2684c2; }
+    .live-monitor-disk { padding: 9px 0; border-top: 1px solid #e0e6ed; }
+    .live-monitor-disk-header { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; overflow-wrap: anywhere; }
+    .live-monitor-disk-header strong { font-size: 12px; }
+    .live-monitor-disk small { color: #617184; }
+    .live-monitor-disk-latency { color: #52606d; font-size: 11px; }
+    .live-monitor-requests { margin-top: 12px; }
+    .live-monitor-requests h4 { margin: 12px 0 6px; font-size: 13px; }
+    #reporting-workspace { display: none; grid-area: reporting; min-width: 0; }
+    #application.reports-view > #reporting-workspace { display: block; }
+    .disk-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 12px; margin-top: 12px; }
+    .disk-server-card { min-width: 0; border: 1px solid #d3dae3; border-radius: 8px; padding: 12px; background: #fbfcfe; }
+    .disk-server-card h3 { margin: 0 0 4px; font-size: 14px; overflow-wrap: anywhere; }
+    .disk-volume { margin-top: 14px; }
+    .disk-volume-header, .disk-volume-legend { display: flex; justify-content: space-between; gap: 10px; align-items: center; font-size: 12px; }
+    .disk-volume-header { margin-bottom: 5px; }
+    .disk-bar { height: 16px; overflow: hidden; border-radius: 8px; background: #dce3eb; border: 1px solid #c6d0dc; }
+    .disk-bar-used { height: 100%; background: #16834a; }
+    .disk-bar-used.warning { background: #d28a00; }
+    .disk-bar-used.critical { background: #c43d3d; }
+    .disk-volume-legend { margin-top: 5px; color: #52606d; }
+    .disk-volume-legend span { overflow-wrap: anywhere; }
+    .monitor-dashboard { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 2fr); gap: 12px; margin: 14px 0; }
+    .monitor-stage-card, .monitor-current-card { min-width: 0; border: 1px solid #d3dae3; border-radius: 8px; background: #fbfcfe; padding: 14px; }
+    .monitor-stage-card { display: flex; align-items: center; gap: 14px; }
+    .monitor-stage-ring { --stage-progress: 0%; flex: 0 0 auto; display: grid; place-items: center; width: 92px; aspect-ratio: 1; border-radius: 50%; background: conic-gradient(var(--accent) var(--stage-progress), #e3e9ef 0); }
+    .monitor-stage-ring::before { content: ""; grid-area: 1 / 1; width: 70px; aspect-ratio: 1; border-radius: 50%; background: #fbfcfe; }
+    .monitor-stage-ring strong { grid-area: 1 / 1; z-index: 1; font-size: 18px; }
+    .monitor-stage-copy strong, .monitor-current-card > strong { display: block; font-size: 14px; }
+    .monitor-stage-copy span, .monitor-current-card span { display: block; margin-top: 4px; color: #52606d; font-size: 12px; overflow-wrap: anywhere; }
+    .monitor-current-card { display: flex; flex-direction: column; justify-content: center; }
+    .monitor-metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 10px 0 14px; }
+    .monitor-metric { min-width: 0; border: 1px solid #d3dae3; border-radius: 8px; background: #fff; padding: 9px 10px; }
+    .monitor-metric strong { display: block; font-size: 20px; line-height: 1.2; }
+    .monitor-metric span { display: block; margin-top: 4px; color: #52606d; font-size: 11px; }
+    .monitor-metric.completed strong { color: #167343; }
+    .monitor-metric.failed strong { color: #a52121; }
     .pair-card { border: 1px solid #b9c2ca; border-radius: 1px; padding: 9px; margin: 9px 0; background: #f7f8f9; }
     .pair-card h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
     .pair-grid { display: grid; grid-template-columns: 1fr; gap: 8px; align-items: end; }
     .pair-grid label { margin: 0; }
     .options { display: grid; grid-template-columns: 1fr; gap: 7px; margin-top: 12px; }
     .patch-panel { margin-top: 12px; border: 1px solid #b9c2ca; background: #f7f8f9; }
+    #patch-workspace .patch-panel { margin: 0; border: 0; }
     .patch-panel summary { padding: 8px; cursor: pointer; font-size: 13px; font-weight: 600; background: var(--panel-title); }
     .patch-content { padding: 9px; }
     #patch-targets { display: grid; gap: 6px; margin: 8px 0 12px; }
     .patch-level { margin: 1px 0 4px 24px; }
     .patch-actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 9px 0; }
+    .linked-server-table { min-width: 1120px; }
+    .linked-server-table input, .linked-server-table select { min-width: 115px; }
+    .linked-server-table input[type="password"] { min-width: 150px; }
     .patch-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 6px; margin: 10px 0; }
     .patch-metric { border: 1px solid #c3cbd2; background: #fff; padding: 7px; }
     .patch-metric strong { display: block; font-size: 17px; }
@@ -54,6 +125,13 @@
     .check input { width: 16px; height: 16px; }
     .muted { color: #52606d; font-size: 12px; }
     .error { color: #a52121; margin-top: 10px; white-space: pre-wrap; }
+    .app-dialog { width: min(520px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line); border-radius: 8px; color: #20252b; box-shadow: 0 18px 50px #10263d40; }
+    .app-dialog::backdrop { background: #12223580; backdrop-filter: blur(2px); }
+    .app-dialog h2 { margin: 0; padding: 14px 18px; border-bottom: 1px solid var(--line); background: var(--panel-title); font-size: 16px; }
+    .app-dialog-body { padding: 18px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; max-height: min(55vh, 420px); overflow-y: auto; }
+    .app-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid #d9dfe5; background: #f7f8f9; }
+    .app-dialog[data-kind="error"] h2 { color: #8c2525; border-left: 4px solid #c43d3d; }
+    .app-dialog[data-kind="warning"] h2 { color: #795311; border-left: 4px solid #d28a00; }
     .hidden { display: none !important; }
     .table-wrap { overflow-x: auto; }
     table { border-collapse: collapse; width: 100%; font-size: 12px; }
@@ -77,7 +155,23 @@
     .event.completed { color: #167343; }
     .event.skipped { color: #8a5a00; }
     #login-card { max-width: 420px; margin: 70px auto; }
-    @media (max-width: 900px) { #application { grid-template-areas: "explorer" "editor" "monitor"; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; min-height: 0; } #application > section:first-child { max-height: none; } }
+    @media (max-width: 900px) { #application { grid-template-areas: "migration" "editor" "monitor" "patch" "disk" "live"; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; min-height: 0; } #application.reports-view { grid-template-areas: "reporting"; }     }
+    #login-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 420px); max-width: 980px; margin: 54px auto; padding: 0; overflow: hidden; }
+    #login-card h2 { grid-column: 1 / -1; margin: 0; padding: 13px 20px; border-radius: 8px 8px 0 0; }
+    .login-visual { position: relative; display: flex; min-height: 470px; flex-direction: column; justify-content: flex-end; overflow: hidden; padding: 36px; background: #102f50; color: #fff; isolation: isolate; }
+    .login-visual::after { position: absolute; z-index: -1; inset: 0; content: ""; background: linear-gradient(180deg, rgba(8,27,48,.04) 0%, rgba(8,27,48,.28) 36%, rgba(8,27,48,.97) 74%); }
+    .login-visual svg { position: absolute; z-index: -2; inset: 0; width: 100%; height: 100%; }
+    .login-visual-label { margin: 0 0 12px; color: #8ed8ff; font-size: 11px; font-weight: 700; letter-spacing: .19em; }
+    .login-visual h3 { max-width: 430px; margin: 0; color: #fff; font-size: clamp(24px, 3vw, 34px); line-height: 1.14; }
+    .login-visual p:last-child { max-width: 420px; margin: 12px 0 0; color: #d4e4f2; font-size: 14px; line-height: 1.6; }
+    #login-form { padding: 30px 32px 32px; align-self: center; }
+    #login-form .muted { margin-top: 5px; line-height: 1.45; }
+    @media (max-width: 700px) {
+      #login-card { grid-template-columns: minmax(0, 1fr); max-width: 500px; margin: 24px auto; }
+      .login-visual { min-height: 220px; padding: 24px; }
+      .login-visual h3 { font-size: 25px; }
+      #login-form { padding: 22px 24px 26px; }
+    }
     @media (max-width: 620px) { header { padding: 8px 10px; } .header-context { display: none; } main { padding: 6px; } .card { padding: 10px; } h2 { margin: -10px -10px 9px; } }
     /* Modern polish */
     :root { background: #f1f4f8; --chrome: #1f4e79; --chrome-dark: #163a5c; --line: #d3dae3; --panel-title: #f6f8fb; --accent: #0f6cbd; }
@@ -85,6 +179,11 @@
     header h1::before { content: "\26C1  "; opacity: .85; }
     .card { border-radius: 8px; box-shadow: 0 1px 3px rgba(16,24,40,.08); }
     h2 { border-radius: 8px 8px 0 0; letter-spacing: .2px; }
+    #migration-setup, #patch-workspace { padding: 0; }
+    .migration-setup-disclosure > summary { padding: 9px 11px; cursor: pointer; background: var(--panel-title); font-size: 14px; font-weight: 600; }
+    .migration-setup-disclosure[open] > summary { border-bottom: 1px solid var(--line); }
+    .migration-setup-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    #migration-setup-content { padding: 12px; }
     input[type="text"], input[type="password"], select, textarea { border-radius: 6px; transition: border-color .15s, box-shadow .15s; }
     input:focus, select:focus, textarea:focus { outline: none; box-shadow: 0 0 0 3px rgba(15,108,189,.22); }
     button { border-radius: 6px; transition: background .15s, transform .05s, box-shadow .15s; }
@@ -106,54 +205,446 @@
     #login-card { border-radius: 10px; box-shadow: 0 8px 24px rgba(16,24,40,.12); }
     footer { background: #fff; }
     ::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-thumb { background: #c1cad4; border-radius: 6px; }
+    html { scroll-behavior: smooth; scroll-padding-top: 82px; }
+    main { max-width: 1840px; margin: 0 auto; padding: 12px; }
+    header { gap: 16px; }
+    .app-navigation { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
+    .app-navigation a { flex: 0 0 auto; padding: 8px 10px; color: #e8f3fc; text-decoration: none; font-size: 13px; border-radius: 6px; }
+    .app-navigation a:hover, .app-navigation a:focus-visible { color: #fff; background: rgba(255,255,255,.14); outline: 2px solid rgba(255,255,255,.65); outline-offset: 1px; }
+    #audit-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 12px 8px; align-items: end; }
+    #audit-filters label { min-width: 0; margin: 0; }
+    #audit-filters input, #audit-filters select, #audit-filters button { width: 100%; min-width: 0; }
+    #audit-filters button { align-self: end; }
+    #audit-export-actions { display: grid; grid-column: span 2; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+    .header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+    #application > section, #patch-panel { scroll-margin-top: 82px; }
+    label { display: block; margin: 0 0 5px; font-size: 13px; font-weight: 600; color: #33475b; }
+    .check { display: flex; }
+    textarea { line-height: 1.55; }
+    input, select, textarea, button { min-height: 38px; }
+    input[type="checkbox"] { min-height: 18px; }
+    #custom-query { min-height: 240px; }
+    #events { height: clamp(190px, 30vh, 360px); }
+    @media (max-width: 1100px) {
+      #application { grid-template-columns: minmax(280px, .85fr) minmax(0, 1.4fr); gap: 10px; }
+      .app-navigation a { padding: 8px; }
+    }
+    @media (max-width: 900px) {
+      main { padding: 10px; }
+      #application { grid-template-areas: "migration" "editor" "monitor" "patch" "disk" "live"; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; min-height: 0; gap: 10px; }
+    }
+    @media (max-width: 620px) {
+      html { scroll-padding-top: 112px; }
+      header { position: sticky; padding: 8px 10px 0; flex-wrap: wrap; gap: 4px 8px; }
+      header .brand { flex: 1 1 auto; min-height: 34px; }
+      header h1 { font-size: 16px; }
+      .header-actions { margin-left: auto; gap: 6px; }
+      .header-actions #current-user { display: none; }
+      .header-actions button { min-height: 34px; padding: 5px 9px; }
+      .app-navigation { order: 3; flex: 1 0 100%; margin: 0 -10px; padding: 0 6px 5px; }
+      .app-navigation a { min-height: 38px; padding: 9px 10px; }
+      .app-navigation { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; scrollbar-width: none; }
+      .app-navigation a { text-align: center; min-width: 0; padding-right: 4px; padding-left: 4px; }
+      main { padding: 8px; }
+      #application { gap: 8px; }
+      .card { padding: 10px; }
+      h2 { margin: -10px -10px 9px; padding: 9px 10px; font-size: 14px; }
+      .row { align-items: stretch; }
+      .row > button { flex: 1 1 100%; }
+      .grow { min-width: min(100%, 180px); }
+      .status-line { align-items: flex-start; gap: 7px 12px; }
+      .patch-actions > button { flex: 1 1 100%; }
+      .patch-actions > .muted { flex: 1 1 100%; }
+      #custom-query { min-height: 200px; }
+      .monitor-dashboard { grid-template-columns: 1fr; }
+      .monitor-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .live-monitor-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #events { height: 220px; }
+      #login-card { margin: 28px auto; }
+      table { min-width: 560px; }
+    }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    :root {
+      color: #182230;
+      background: #f3f6fa;
+      --chrome: #173b5e;
+      --chrome-dark: #112f4b;
+      --line: #d8e0e8;
+      --panel-title: #f7f9fc;
+      --accent: #1769aa;
+    }
+    body { color: #182230; }
+    header {
+      min-height: 62px;
+      padding: 10px 24px;
+      gap: 24px;
+      background: linear-gradient(105deg, #153957 0%, #1b527b 68%, #236991 100%);
+      border-bottom: 1px solid #12324e;
+      box-shadow: 0 3px 12px rgba(16, 38, 60, .16);
+    }
+    header .brand { min-width: 220px; align-items: center; }
+    header h1 { font-size: 19px; letter-spacing: -.2px; }
+    header h1::before { opacity: .72; }
+    .header-context { color: #d6e4ef; }
+    .app-navigation { flex: 1 1 auto; justify-content: center; gap: 6px; }
+    .app-navigation a { padding: 9px 13px; color: #e5f0f8; font-weight: 500; }
+    .app-navigation a:hover, .app-navigation a:focus-visible { background: rgba(255,255,255,.12); outline-offset: 0; }
+    .header-actions #current-user { font-size: 12px; white-space: nowrap; }
+    main { max-width: 1600px; padding: 22px; }
+    #application { gap: 16px; min-height: auto; }
+    .card { padding: 18px; border: 1px solid #d9e1e9; border-radius: 12px; box-shadow: 0 2px 8px rgba(21, 43, 65, .055); }
+    h2 {
+      margin: -18px -18px 16px;
+      padding: 13px 17px;
+      color: #22364a;
+      background: #f7f9fc;
+      border-bottom: 1px solid #e0e6ed;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+    #migration-setup, #patch-workspace { padding: 0; }
+    .migration-setup-disclosure > summary {
+      padding: 14px 17px;
+      color: #22364a;
+      background: #f7f9fc;
+      font-size: 15px;
+      border-radius: 12px;
+    }
+    .migration-setup-disclosure[open] > summary { border-radius: 12px 12px 0 0; }
+    #migration-setup-content { padding: 16px; }
+    .patch-panel { border-color: #e0e6ed; background: #fbfcfe; }
+    #patch-workspace .patch-panel { border: 0; }
+    .patch-panel summary { padding: 13px 16px; color: #22364a; background: #f7f9fc; font-size: 14px; }
+    .patch-content { padding: 14px 16px 16px; }
+    .pair-card { margin: 12px 0; padding: 14px; border-color: #dce4ec; border-radius: 10px; background: #fbfcfe; }
+    .pair-card h3 { margin-bottom: 12px; color: #243b53; font-size: 14px; }
+    .pair-grid, .options { gap: 12px; }
+    .options { margin-top: 16px; }
+    label { margin-bottom: 6px; color: #34465a; font-size: 12px; }
+    input[type="text"], input[type="password"], select, textarea {
+      border-color: #c5d0dc;
+      border-radius: 7px;
+      background: #fff;
+      color: #182230;
+    }
+    input[type="text"], input[type="password"], select { min-height: 40px; padding: 8px 10px; }
+    input:focus, select:focus, textarea:focus { border-color: #4387bd; box-shadow: 0 0 0 3px rgba(23,105,170,.14); }
+    button { min-height: 39px; padding: 8px 14px; border-radius: 7px; font-size: 13px; }
+    button:not(.secondary) { background: #1769aa; border-color: #1769aa; }
+    button:not(.secondary):hover:not(:disabled) { background: #12598f; }
+    button.secondary { color: #29445e; background: #f4f7fa; border-color: #cbd6e1; }
+    button.secondary:hover:not(:disabled) { color: #183a59; background: #eaf0f6; border-color: #b7c7d6; }
+    button:focus-visible, a:focus-visible, summary:focus-visible, input[type="checkbox"]:focus-visible {
+      outline: 3px solid rgba(23,105,170,.35);
+      outline-offset: 2px;
+    }
+    .check { gap: 9px; color: #34465a; }
+    .check input { accent-color: #1769aa; }
+    .muted { color: #617184; line-height: 1.55; }
+    .status-line { gap: 10px 14px; }
+    .pill { padding: 6px 10px; border-color: #d5dee8; border-radius: 999px; color: #334b63; background: #f5f8fb; }
+    .status-success { color: #176b3a !important; border-color: #9bd2ad !important; background: #e9f7ee !important; }
+    .status-warning { color: #805300 !important; border-color: #e7c36f !important; background: #fff6df !important; }
+    .status-active { color: #135e91 !important; border-color: #9dc9e5 !important; background: #eaf5fc !important; }
+    .status-error { color: #972d2d !important; border-color: #e3aaaa !important; background: #fff0f0 !important; }
+    .status-neutral { color: #52606d !important; border-color: #cbd5df !important; background: #f1f4f7 !important; }
+    #run-status, #patch-status { display: inline-block; border: 1px solid transparent; border-radius: 999px; padding: 5px 10px; font-weight: 600; }
+    .monitor-metric.skipped strong { color: #9a6700; }
+    .monitor-metric.active strong { color: #1769aa; }
+    .monitor-metric.pending strong { color: #617184; }
+    .progress { height: 9px; margin: 12px 0; border: 0; background: #e8edf3; }
+    #events { padding: 12px; border-color: #d6dfe8; background: #fbfcfe; line-height: 1.6; }
+    .event { padding: 5px 2px; }
+    .event.started, .event.inprogress { color: #1769aa; }
+    .event.paused, .event.stopped { color: #805300; }
+    .event.neutral { color: #617184; }
+    td.status-success, td.status-warning, td.status-error, td.status-active, td.status-neutral { font-weight: 600; }
+    .table-wrap { border-radius: 8px; }
+    th, td { padding: 9px 10px; border-color: #e0e6ed; }
+    th { color: #40556a; background: #f3f6f9; }
+    .error:not(:empty) { color: #922d2d; background: #fff5f4; border-color: #f1d0cd; }
+    footer { padding: 12px 24px; color: #728095; background: #f8fafc; border-color: #e1e7ee; }
+    @media (max-width: 1100px) {
+      header { gap: 14px; padding-inline: 16px; }
+      header .brand { min-width: 185px; }
+      .app-navigation { justify-content: flex-start; }
+      main { padding: 16px; }
+      #application { gap: 12px; }
+    }
+    @media (max-width: 900px) {
+      #application { gap: 12px; }
+    }
+    @media (max-width: 620px) {
+      header { padding: 8px 12px 0; gap: 4px 8px; }
+      header .brand { min-width: 0; }
+      header h1 { font-size: 17px; }
+      main { padding: 10px; }
+      #application { gap: 10px; }
+      .card { padding: 14px; border-radius: 10px; }
+      h2 { margin: -14px -14px 13px; padding: 12px 14px; }
+      #migration-setup-content { padding: 12px; }
+      .migration-setup-disclosure > summary { padding: 12px 14px; }
+      .patch-content { padding: 12px; }
+      .pair-card { padding: 12px; }
+      .status-line { gap: 8px; }
+      footer { padding: 10px 14px; }
+    }
+    #application, #application > section, .table-wrap { min-width: 0; }
+    .pair-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .pair-grid > :nth-child(3) { grid-column: 1 / -1; }
+    header { flex-wrap: wrap; }
+    header .brand { flex: 1 1 auto; min-width: 0; }
+    .app-navigation {
+      order: 3;
+      flex: 1 0 100%;
+      min-width: 0;
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      overflow: visible;
+    }
+    .app-navigation a { flex: 0 1 auto; }
+    @media (max-width: 1280px) {
+      header { gap: 8px 14px; }
+    }
+    @media (max-width: 1100px) {
+      .monitor-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 900px) {
+      .pair-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 620px) {
+      header { gap: 4px 8px; }
+      .app-navigation {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        overflow: visible;
+      }
+      .app-navigation a { min-width: 0; padding-right: 4px; padding-left: 4px; text-align: center; }
+      #audit-filters { grid-template-columns: repeat(auto-fit, minmax(min(100%, 155px), 1fr)); }
+      #audit-export-actions { grid-column: 1 / -1; }
+      .pair-grid { grid-template-columns: minmax(0, 1fr); }
+      .pair-grid > :nth-child(3) { grid-column: auto; }
+      .monitor-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 380px) {
+      .app-navigation { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 900px) {
+      header .brand > .header-context { display: none; }
+    }
+    footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px 16px;
+      text-align: left;
+      font-size: 12px;
+    }
+    @media (max-width: 480px) {
+      footer { flex-wrap: wrap; justify-content: center; }
+    }
   </style>
 </head>
 <body>
   <header>
     <div class="brand"><h1>Database Migration</h1><span class="header-context">SQL Server management workspace</span></div>
-    <span id="current-user" class="header-context"></span>
-    <button id="logout" class="secondary hidden">Sign out</button>
+    <nav id="app-navigation" class="app-navigation hidden" aria-label="Workspace sections">
+      <a href="#migration-setup">Migration</a>
+      <a href="#patch-panel">Patching</a>
+      <a href="#migration-monitor">Monitor</a>
+      <a href="#live-server-monitor-workspace">Live server monitor</a>
+      <a href="#custom-sql-workspace">Custom SQL</a>
+      <a href="#disk-usage-workspace">Disk usage</a>
+      <a href="#reporting-workspace" id="reports-navigation-link">Logs &amp; audit</a>
+    </nav>
+    <div class="header-actions">
+      <span id="current-user" class="header-context"></span>
+      <button id="logout" class="secondary hidden">Sign out</button>
+    </div>
   </header>
   <main>
     <section id="login-card" class="card">
       <h2>Sign in</h2>
+      <div class="login-visual" aria-hidden="true">
+        <svg viewBox="0 0 760 520" preserveAspectRatio="xMidYMid slice" focusable="false">
+          <defs>
+            <linearGradient id="sql-bg" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#133e67"/>
+              <stop offset=".55" stop-color="#0879a9"/>
+              <stop offset="1" stop-color="#12a6bc"/>
+            </linearGradient>
+            <linearGradient id="sql-cylinder" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#f4fbff"/>
+              <stop offset="1" stop-color="#a9d9f0"/>
+            </linearGradient>
+            <radialGradient id="sql-glow">
+              <stop offset="0" stop-color="#53d8ed" stop-opacity=".44"/>
+              <stop offset="1" stop-color="#53d8ed" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <rect width="760" height="520" fill="url(#sql-bg)"/>
+          <circle cx="565" cy="170" r="250" fill="url(#sql-glow)"/>
+          <g fill="none" stroke="#d9f3ff" stroke-opacity=".16">
+            <path d="M0 95H760M0 145H760M0 195H760M0 245H760M0 295H760M0 345H760M0 395H760M0 445H760"/>
+            <path d="M70 0V520M120 0V520M170 0V520M220 0V520M270 0V520M320 0V520M370 0V520M420 0V520M470 0V520M520 0V520M570 0V520M620 0V520M670 0V520M720 0V520"/>
+          </g>
+          <g fill="none" stroke="#9feaff" stroke-width="2" stroke-dasharray="5 8" opacity=".8">
+            <path d="M245 205C310 205 302 135 365 135H427"/>
+            <path d="M245 285C315 285 310 340 365 340H427"/>
+          </g>
+          <g transform="translate(116 122)">
+            <ellipse cx="82" cy="34" rx="82" ry="30" fill="url(#sql-cylinder)" stroke="#fff" stroke-width="2"/>
+            <path d="M0 34v175c0 17 37 31 82 31s82-14 82-31V34" fill="url(#sql-cylinder)" stroke="#fff" stroke-width="2"/>
+            <path d="M0 91c0 17 37 31 82 31s82-14 82-31M0 150c0 17 37 31 82 31s82-14 82-31" fill="none" stroke="#5aa5cf" stroke-width="3"/>
+            <ellipse cx="82" cy="34" rx="82" ry="30" fill="none" stroke="#fff" stroke-width="2"/>
+            <text x="82" y="108" text-anchor="middle" fill="#16476f" font-family="Segoe UI,Arial,sans-serif" font-size="27" font-weight="700" letter-spacing="2">SQL</text>
+          </g>
+          <g transform="translate(430 92)" fill="none" stroke="#eaf9ff" stroke-width="3">
+            <rect x="0" y="0" width="176" height="100" rx="13" fill="#ffffff" fill-opacity=".12"/>
+            <rect x="0" y="119" width="176" height="100" rx="13" fill="#ffffff" fill-opacity=".12"/>
+            <rect x="0" y="238" width="176" height="100" rx="13" fill="#ffffff" fill-opacity=".12"/>
+            <path d="M23 29h83M23 148h83M23 267h83" stroke-opacity=".7"/>
+            <circle cx="145" cy="30" r="7" fill="#73edc2" stroke="none"/>
+            <circle cx="145" cy="149" r="7" fill="#73edc2" stroke="none"/>
+            <circle cx="145" cy="268" r="7" fill="#ffd166" stroke="none"/>
+            <path d="M23 56h130M23 175h130M23 294h130" stroke-opacity=".34"/>
+          </g>
+          <g fill="#b8eeff" opacity=".9">
+            <circle cx="365" cy="135" r="5"/><circle cx="365" cy="340" r="5"/>
+            <circle cx="427" cy="135" r="5"/><circle cx="427" cy="340" r="5"/>
+          </g>
+        </svg>
+        <span class="login-visual-label">SQL SERVER · MIGRATION WORKSPACE</span>
+        <h3>Move your data with confidence.</h3>
+        <p>Plan, migrate, and monitor SQL Server environments from one secure workspace.</p>
+      </div>
       <form id="login-form">
         <label for="username">Application username</label>
         <input id="username" type="text" autocomplete="username" required maxlength="128">
         <label for="password" style="margin-top:12px">Password</label>
         <input id="password" type="password" autocomplete="current-password" required>
+        <label class="check" style="margin-top:12px"><input id="remember-username" type="checkbox"> Remember username on this device</label>
+        <div class="muted">Only the username is saved in this browser. Your password and sign-in session are not saved by this option.</div>
         <button style="margin-top:16px;width:100%">Sign in</button>
         <div id="login-error" class="error" role="alert"></div>
       </form>
     </section>
 
     <div id="application" class="hidden">
-      <section class="card">
-        <h2>Configure up to 3 source / target pairs</h2>
-        <p class="muted">Pairs run one after another. Databases within each pair run sequentially; each database is validated, migrated, post-checked, and its temporary backup deleted before the next begins.</p>
-        <p class="muted">Enter a hostname, SQL instance (for example, HOST\INSTANCE), or IP address. Validate checks SQL connectivity/version and shared-drive access before discovery.</p>
-        <label class="check"><input id="remember-settings" type="checkbox" checked> Remember source, target, and shared backup paths in this browser</label>
-        <p class="muted">Previously used servers and backup paths are suggested as you type (like SSMS), and picking a known source or target autofills its last-used partner and backup path. No credentials are stored. <a href="#" id="clear-history">Clear history</a></p>
-        <div id="pair-list"></div>
+      <section id="reporting-workspace" class="card">
+        <h2>Logs &amp; audit</h2>
+        <p class="muted">Review durable migration and patch summaries, application audit events, and recent host/run logs. Custom SQL audit records include target and database metadata only; statement text and credentials are never stored.</p>
         <div class="row">
-          <button id="add-pair" class="secondary" type="button">Add another instance pair</button>
+          <button id="refresh-reporting" type="button">Refresh reports</button>
+          <button id="export-reporting" class="secondary" type="button" disabled>Export snapshot (JSON)</button>
+          <span id="reporting-status" class="muted" aria-live="polite">Reports have not been loaded.</span>
         </div>
-        <div id="discovery-error" class="error" role="alert"></div>
-        <div class="options" id="options">
-          <label class="check"><input type="checkbox" data-option="MigrateLogins"> SQL logins (excluding sa)</label>
-          <label class="check"><input type="checkbox" data-option="MigrateAgentJobs"> SQL Agent jobs (disabled on target)</label>
-          <label class="check"><input type="checkbox" data-option="MigrateAgentOperators"> SQL Agent operators</label>
-          <label class="check"><input type="checkbox" data-option="ConfigureLinkedServers"> Configure linked servers</label>
-          <label class="check"><input type="checkbox" data-option="SkipLinkedServers" checked> Skip linked servers for this run</label>
-          <label class="check"><input type="checkbox" data-option="RepairOrphanUsers"> Repair orphaned users</label>
-          <label class="check"><input type="checkbox" data-option="UpdateStatistics"> Update statistics</label>
+        <div id="reporting-error" class="error" role="alert"></div>
+        <h3>Migration summaries</h3>
+        <div id="migration-report-table" class="table-wrap"></div>
+        <h4>Users, jobs &amp; linked servers</h4>
+        <p class="muted">Counts show source inventory from the latest matching discovery report; stage status indicates whether the selected server-object migration stage completed.</p>
+        <div id="migration-server-object-report-table" class="table-wrap"></div>
+        <h3>Patch summaries</h3>
+        <div id="patch-report-table" class="table-wrap"></div>
+        <h3>Audit trail</h3>
+        <p id="audit-integrity-status" class="status-neutral" role="status" aria-live="polite">Audit integrity has not been checked.</p>
+        <div class="row" id="audit-filters">
+          <label>Search audit <input id="audit-search" type="search" autocomplete="off" placeholder="Actor, action, resource, details"></label>
+          <label>Actor <input id="audit-actor-filter" type="search" autocomplete="off" placeholder="User name"></label>
+          <label>Outcome
+            <select id="audit-outcome-filter">
+              <option value="">All outcomes</option>
+              <option value="Succeeded">Succeeded</option>
+              <option value="Failed">Failed</option>
+              <option value="PartiallyFailed">Partially failed</option>
+              <option value="Rejected">Rejected</option>
+              <option value="Denied">Denied</option>
+              <option value="Requested">Requested</option>
+            </select>
+          </label>
+          <label>Category
+            <select id="audit-category-filter">
+              <option value="">All categories</option>
+              <option value="Security">Security</option>
+              <option value="Change">Change</option>
+              <option value="Execution">Execution</option>
+              <option value="Operations">Operations</option>
+            </select>
+          </label>
+          <label>Severity
+            <select id="audit-severity-filter">
+              <option value="">All severities</option>
+              <option value="Critical">Critical</option>
+              <option value="Error">Error</option>
+              <option value="Warning">Warning</option>
+              <option value="Information">Information</option>
+            </select>
+          </label>
+          <label>From <input id="audit-from-date" type="date"></label>
+          <label>To <input id="audit-to-date" type="date"></label>
+          <div id="audit-export-actions">
+            <button id="export-audit-json" class="secondary" type="button" disabled>Export audit (JSON)</button>
+            <button id="export-audit-csv" class="secondary" type="button" disabled>Export audit (CSV)</button>
+          </div>
         </div>
-        <div class="row" style="margin-top:18px">
-          <button id="start" disabled>Start migration</button>
-          <span id="migration-error" class="error" role="alert"></span>
-        </div>
-        <details id="patch-panel" class="patch-panel">
+        <p id="audit-record-count" class="muted" aria-live="polite">No audit query has been run.</p>
+        <div id="audit-report-table" class="table-wrap"></div>
+        <h3>Recent logs</h3>
+        <div id="logs-report-table" class="table-wrap"></div>
+      </section>
+      <section id="migration-setup" class="card">
+        <details id="migration-setup-details" class="migration-setup-disclosure" open>
+          <summary>Configure up to 3 source / target pairs</summary>
+          <div id="migration-setup-content">
+            <p class="muted">Pairs run one after another. Databases within each pair run sequentially; each database is validated, migrated, post-checked, and its temporary backup deleted before the next begins.</p>
+            <p class="muted">Enter a hostname, SQL instance (for example, HOST\INSTANCE), or IP address. Validate checks SQL connectivity/version and shared-drive access before discovery.</p>
+            <label class="check"><input id="remember-settings" type="checkbox" checked> Remember source, target, and shared backup paths in this browser</label>
+            <p class="muted">Previously used servers and backup paths are suggested as you type (like SSMS), and picking a known source or target autofills its last-used partner and backup path. No credentials are stored. <a href="#" id="clear-history">Clear history</a></p>
+            <div id="pair-list"></div>
+            <div class="row">
+              <button id="add-pair" class="secondary" type="button">Add another instance pair</button>
+            </div>
+            <div id="discovery-error" class="error" role="alert"></div>
+            <div class="options" id="options">
+              <label class="check"><input type="checkbox" data-option="MigrateLogins"> SQL logins (excluding sa)</label>
+              <label class="check"><input type="checkbox" data-option="MigrateAgentJobs"> SQL Agent jobs (disabled on target)</label>
+              <label class="check"><input type="checkbox" data-option="MigrateAgentOperators"> SQL Agent operators</label>
+              <label class="check"><input type="checkbox" data-option="ConfigureLinkedServers"> Configure linked servers</label>
+              <label class="check"><input type="checkbox" data-option="SkipLinkedServers" checked> Skip linked servers for this run</label>
+              <label class="check"><input type="checkbox" data-option="RepairOrphanUsers"> Repair orphaned users</label>
+              <label class="check"><input type="checkbox" data-option="UpdateStatistics"> Update statistics</label>
+            </div>
+            <div id="linked-server-setup" class="linked-server-setup hidden">
+              <h3>Linked-server destination mapping</h3>
+              <p class="muted">Load definitions from each source, then change Data source to the replacement server address. Existing passwords cannot be read from SQL Server; enter a new remote password below when using SQL authentication. Passwords are sent only for this run and are not saved in browser storage or the generated CSV.</p>
+              <div class="row linked-server-toolbar">
+                <div class="grow">
+                  <label for="linked-server-pair">Source/target pair</label>
+                  <select id="linked-server-pair"></select>
+                </div>
+                <button id="load-linked-servers" class="secondary" type="button">Load linked servers from source</button>
+                <button id="add-linked-server" class="secondary" type="button">Add definition</button>
+              </div>
+              <div id="linked-server-status" class="muted" aria-live="polite"></div>
+              <div id="linked-server-error" class="error" role="alert"></div>
+              <div class="table-wrap">
+                <table class="linked-server-table">
+                  <thead><tr><th>Name</th><th>Provider</th><th>Product</th><th>Data source (new destination)</th><th>Catalog</th><th>Security</th><th>Remote login</th><th>New password (SQL auth)</th><th></th></tr></thead>
+                  <tbody id="linked-server-rows"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="row" style="margin-top:18px">
+              <button id="start" disabled>Start migration</button>
+              <span id="migration-error" class="error" role="alert"></span>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <section id="patch-workspace" class="card">
+        <details id="patch-panel" class="patch-panel" open>
           <summary>Patch selected SQL instances</summary>
           <div class="patch-content">
             <p class="muted">Refresh Microsoft’s SQL build catalog, assess compatibility and installed build state, then download and apply a selected KB. Catalog refresh and package download need internet access; assessment and installation use the local SQL environment. The repository must be accessible to the app host and target server.</p>
@@ -184,13 +675,38 @@
         </details>
       </section>
 
-      <section class="card">
+      <section id="migration-monitor" class="card">
         <h2>Live migration monitor</h2>
         <div class="status-line">
           <span id="run-status" class="pill">No migration running</span>
           <span id="active-stage" class="muted">Waiting for a migration.</span>
-          <span id="outcome-counts" class="muted"></span>
         </div>
+        <div class="monitor-dashboard">
+          <div class="monitor-stage-card">
+            <div id="monitor-stage-ring" class="monitor-stage-ring" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <strong id="monitor-stage-percent">0%</strong>
+            </div>
+            <div class="monitor-stage-copy">
+              <strong>Current stage</strong>
+              <span id="monitor-stage-name">Waiting for migration progress.</span>
+            </div>
+          </div>
+          <div class="monitor-current-card">
+            <strong>Current job</strong>
+            <span id="monitor-current-job">No active database job.</span>
+            <span id="monitor-current-pair">Waiting for a migration.</span>
+          </div>
+        </div>
+        <div class="monitor-metrics" aria-live="polite">
+          <div class="monitor-metric"><strong id="monitor-total-jobs">0</strong><span>Total database jobs</span></div>
+          <div class="monitor-metric completed"><strong id="monitor-completed-jobs">0</strong><span>Completed</span></div>
+          <div class="monitor-metric skipped"><strong id="monitor-skipped-jobs">0</strong><span>Skipped</span></div>
+          <div class="monitor-metric active"><strong id="monitor-active-jobs">0</strong><span>In progress</span></div>
+          <div class="monitor-metric pending"><strong id="monitor-pending-jobs">0</strong><span>Pending</span></div>
+          <div class="monitor-metric failed"><strong id="monitor-failed-jobs">0</strong><span>Failed</span></div>
+        </div>
+        <div id="outcome-counts" class="muted" style="margin-bottom:8px"></div>
+        <div class="progress-label"><span>Overall database job completion</span><strong id="monitor-overall-percent">0%</strong></div>
         <div class="progress"><div id="progress-bar"></div></div>
         <div class="progress-label"><span id="step-progress-label">No active step.</span><strong id="step-progress-percent">0%</strong></div>
         <div class="progress step-progress"><div id="step-progress-bar"></div></div>
@@ -202,14 +718,15 @@
         <div id="events" aria-live="polite"></div>
       </section>
 
-      <section class="card">
+      <section id="custom-sql-workspace" class="card">
         <h2>Run custom T-SQL</h2>
-        <p class="muted">Run against a migration pair endpoint or a single SQL Server without configuring a source/target pair.</p>
+        <p class="muted">Run against a configured pair endpoint, an individual server, or multiple independent SQL instances.</p>
         <div class="grow" style="margin-bottom:10px">
           <label for="custom-scope">Target scope</label>
           <select id="custom-scope">
             <option value="Pair">Migration pair</option>
             <option value="Standalone">Individual SQL instance</option>
+            <option value="Multiple">Any SQL instances (multiple)</option>
           </select>
         </div>
         <div id="custom-pair-controls" class="row">
@@ -232,6 +749,11 @@
           </div>
           <button id="discover-standalone-instance" class="secondary" type="button">Validate and discover</button>
         </div>
+        <div id="custom-multiple-instance-controls" class="hidden" style="margin-top:10px">
+          <label for="custom-sql-instances">SQL instances (one per line or comma-separated; independent of configured pairs)</label>
+          <textarea id="custom-sql-instances" placeholder="SQLHOST01\nSQLHOST02\NORTHWIND"></textarea>
+          <div class="muted">Connections use the web host's SQL authentication identity. The same database and statement run sequentially on each instance. A host,port value remains a single instance entry.</div>
+        </div>
         <div id="standalone-instance-status" class="muted" style="margin-top:8px" aria-live="polite"></div>
         <div id="standalone-instance-error" class="error" role="alert"></div>
         <div id="standalone-discovery-results" class="table-wrap standalone-discovery hidden"></div>
@@ -239,6 +761,7 @@
           <div class="grow">
             <label for="custom-database">Database</label>
             <select id="custom-database"></select>
+            <input id="custom-multiple-database" class="hidden" type="text" value="master" placeholder="Database name">
           </div>
         </div>
         <div style="margin-top:12px">
@@ -253,15 +776,64 @@
         <div id="custom-sql-error" class="error" role="alert"></div>
         <div id="custom-sql-results" class="table-wrap hidden" style="margin-top:12px"></div>
       </section>
+
+      <section id="disk-usage-workspace" class="card">
+        <h2>Server disk usage</h2>
+        <p class="muted">View used and free capacity for every volume on one or more SQL Server hosts. Green indicates less than 80% used, amber 80-89%, and red 90% or more. Connections use the web host's Windows identity and require permission to connect to SQL Server and read remote disk inventory.</p>
+        <label for="disk-sql-instances">SQL instances (one per line or comma-separated)</label>
+        <textarea id="disk-sql-instances" rows="3" style="min-height:90px" placeholder="SQLHOST01\INSTANCE&#10;SQLHOST02,1433"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button id="check-disk-usage" type="button">Check disk usage</button>
+          <span id="disk-usage-status" class="muted" aria-live="polite"></span>
+        </div>
+        <div id="disk-usage-error" class="error" role="alert"></div>
+        <div id="disk-usage-summary" class="patch-insights" aria-live="polite"></div>
+        <div id="disk-usage-results" class="disk-results" aria-live="polite"></div>
+      </section>
+
+      <section id="live-server-monitor-workspace" class="card">
+        <h2>Live server monitor</h2>
+        <p class="muted">Monitor SQL health using transient 15-second snapshots. CPU, memory, disk capacity, and storage latency are graphed with rolling in-memory trends and threshold alerts; active requests and blocking are shown separately. Nothing from these snapshots is written to application logs, audit logs, or disk.</p>
+        <p class="muted">When a migration starts, its source and target instances are selected and monitored automatically. The web host identity needs SQL connectivity and server-state permission (VIEW SERVER STATE; SQL Server 2022+ may require VIEW SERVER PERFORMANCE STATE).</p>
+        <div class="row live-monitor-add-row">
+          <div class="grow">
+            <label for="live-monitor-instance-input">Add SQL instance</label>
+            <input id="live-monitor-instance-input" type="text" maxlength="256" placeholder="HOST\\INSTANCE or hostname,1433" autocomplete="off">
+          </div>
+          <button id="live-monitor-add-instance" class="secondary" type="button">Add instance</button>
+          <button id="live-monitor-add-pair-instances" class="secondary" type="button">Add configured instances</button>
+        </div>
+        <div id="live-monitor-targets" class="live-monitor-targets" aria-label="Select SQL instances to monitor"></div>
+        <div class="row live-monitor-actions">
+          <button id="live-monitor-start" type="button">Start monitoring</button>
+          <button id="live-monitor-refresh" class="secondary" type="button">Refresh now</button>
+          <button id="live-monitor-stop" class="secondary" type="button" disabled>Stop monitoring</button>
+          <span id="live-monitor-status" class="muted" role="status" aria-live="polite">Select one or more SQL instances to begin.</span>
+        </div>
+        <div id="live-monitor-error" class="error" role="alert"></div>
+        <div id="live-monitor-results" class="live-monitor-cards" aria-live="polite"></div>
+      </section>
+
     </div>
   </main>
-  <footer>Developed by - vishal pillai</footer>
+  <dialog id="app-dialog" class="app-dialog" aria-labelledby="app-dialog-title" aria-describedby="app-dialog-message">
+    <h2 id="app-dialog-title"></h2>
+    <div id="app-dialog-message" class="app-dialog-body"></div>
+    <div class="app-dialog-actions">
+      <button id="app-dialog-cancel" class="secondary" type="button">Cancel</button>
+      <button id="app-dialog-confirm" type="button">OK</button>
+    </div>
+  </dialog>
+  <footer><span>© 2026 Vishal Pillai</span><span>SQL Server Migration Tool</span></footer>
   <datalist id="history-servers"></datalist>
   <datalist id="history-paths"></datalist>
   <script>
     const $ = (id) => document.getElementById(id);
     const historyKey = "dbMigrationHistory.v1";
     const historyLimit = 25;
+    const migrationSetupStateKey = "dbMigrationSetupExpanded.v1";
+    const patchPanelStateKey = "dbMigrationPatchExpanded.v1";
+    const rememberedUsernameKey = "dbMigrationRememberedUsername.v1";
 
     function loadHistory() {
       try {
@@ -341,30 +913,545 @@
     let controlPaused = false;
     let alertedFailure = false;
     let pollInProgress = false;
+    let applicationAuthenticated = false;
+    let suppressExistingEventReplay = false;
     let selectedDatabaseTotal = 0;
+    let activeDatabaseKey = null;
+    let currentStagePercent = null;
+    let liveMonitorTimer = null;
+    let liveMonitorInProgress = false;
+    let liveMonitorAbortController = null;
+    let liveMonitorGeneration = 0;
+    let liveMonitorObservedRunId = null;
+    let liveMonitorStartedByMigration = false;
+    let liveMonitorMigrationPairs = [];
+    const liveMonitorSelection = new Set();
+    const liveMonitorManualTargets = new Map();
+    const liveMonitorHistory = new Map();
+    const liveMonitorDiskCounters = new Map();
     const outcomes = new Map();
 
-    async function api(path, body) {
+    async function api(path, body, signal) {
       const response = await fetch(path, {
         method: body === undefined ? "GET" : "POST",
         headers: body === undefined ? {} : { "Content-Type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
         credentials: "same-origin",
-        cache: "no-store"
+        cache: "no-store",
+        signal
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
       return payload;
     }
 
+    function showAppDialog({ title, message, kind = "info", confirm = false, confirmLabel = "Continue" }) {
+      const dialog = $("app-dialog");
+      const confirmButton = $("app-dialog-confirm");
+      const cancelButton = $("app-dialog-cancel");
+      $("app-dialog-title").textContent = title;
+      $("app-dialog-message").textContent = message;
+      dialog.dataset.kind = kind;
+      dialog.setAttribute("role", confirm ? "dialog" : "alertdialog");
+      confirmButton.textContent = confirm ? confirmLabel : "OK";
+      cancelButton.classList.toggle("hidden", !confirm);
+      confirmButton.classList.toggle("secondary", confirm);
+
+      return new Promise((resolve) => {
+        confirmButton.onclick = () => dialog.close("confirm");
+        cancelButton.onclick = () => dialog.close("cancel");
+        dialog.onclose = () => resolve(dialog.returnValue === "confirm");
+        dialog.showModal();
+        (confirm ? cancelButton : confirmButton).focus();
+      });
+    }
+
+    let reportingSnapshot = null;
+    let auditRefreshTimer = null;
+    let auditQuerySequence = 0;
+
+    function renderReportingTable(containerId, headers, rows) {
+      const container = $(containerId);
+      container.replaceChildren();
+      const table = document.createElement("table");
+      const thead = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      for (const header of headers) {
+        const cell = document.createElement("th");
+        cell.textContent = header;
+        headRow.append(cell);
+      }
+      thead.append(headRow);
+      const tbody = document.createElement("tbody");
+      for (const values of rows) {
+        const row = document.createElement("tr");
+        for (const value of values) {
+          const cell = document.createElement("td");
+          const text = value === null || value === undefined || value === "" ? "—" : String(value);
+          cell.textContent = text;
+          const statusClass = getStatusColorClass(text);
+          if (statusClass) cell.classList.add(statusClass);
+          row.append(cell);
+        }
+        tbody.append(row);
+      }
+      if (!rows.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = headers.length;
+        cell.className = "muted";
+        cell.textContent = "No records available.";
+        row.append(cell);
+        tbody.append(row);
+      }
+      table.append(thead, tbody);
+      container.append(table);
+    }
+
+    function getStatusColorClass(value) {
+      const status = String(value || "").trim().toLowerCase();
+      if (/^(completed|complete|succeeded|successful|passed|eligible|online)$/.test(status)) return "status-success";
+      if (/^(failed|failure|error|blocked|critical|tampered|keyunavailable)$/.test(status)) return "status-error";
+      if (/^(skipped|warning|partiallyfailed|partial|legacypresent|legacy)$/.test(status)) return "status-warning";
+      if (/^verified$/.test(status)) return "status-success";
+      if (/^(started|inprogress|running|paused|resuming|pausing)$/.test(status)) return "status-active";
+      if (/^(pending|notstarted|unknown|stopped|neutral)$/.test(status)) return "status-neutral";
+      return "";
+    }
+
+    function getFilteredAuditRecords() {
+      if (!reportingSnapshot) return [];
+      const search = $("audit-search").value.trim().toLowerCase();
+      const actor = $("audit-actor-filter").value.trim().toLowerCase();
+      const outcome = $("audit-outcome-filter").value;
+      const category = $("audit-category-filter").value;
+      const severity = $("audit-severity-filter").value;
+      const fromDate = $("audit-from-date").value;
+      const toDate = $("audit-to-date").value;
+      return (reportingSnapshot.AuditRecords || []).filter((item) => {
+        const searchable = [
+          item.Actor, item.ActorType, item.Action, item.Outcome, item.Category, item.Severity,
+          item.ResourceType, item.ResourceName, item.RunId, item.ClientAddress, item.RequestId,
+          item.Details ? JSON.stringify(item.Details) : ""
+        ].join(" ").toLowerCase();
+        const date = String(item.Timestamp || "").slice(0, 10);
+        return (!search || searchable.includes(search)) &&
+          (!actor || String(item.Actor || "").toLowerCase().includes(actor)) &&
+          (!outcome || item.Outcome === outcome) &&
+          (!category || item.Category === category) &&
+          (!severity || item.Severity === severity) &&
+          (!fromDate || date >= fromDate) &&
+          (!toDate || date <= toDate);
+      });
+    }
+
+    function renderAuditRecords() {
+      const integrity = reportingSnapshot && reportingSnapshot.AuditIntegrity;
+      const indicator = $("audit-integrity-status");
+      indicator.classList.remove("status-success", "status-warning", "status-error", "status-neutral");
+      if (!integrity) {
+        indicator.textContent = "Audit integrity has not been checked.";
+        indicator.classList.add("status-neutral");
+      } else {
+        const statusClass = integrity.Status === "Verified" ? "status-success" :
+          integrity.Status === "LegacyPresent" ? "status-warning" :
+          ["Tampered", "KeyUnavailable"].includes(integrity.Status) ? "status-error" : "status-neutral";
+        indicator.classList.add(statusClass);
+        indicator.textContent = `Integrity: ${integrity.Status} · ${integrity.VerifiedEntries || 0} verified · ${integrity.LegacyEntries || 0} legacy` +
+          (integrity.Error ? ` · ${integrity.Error}` : "");
+      }
+      const records = getFilteredAuditRecords();
+      const matchingCount = reportingSnapshot && Number.isFinite(reportingSnapshot.AuditMatchingEntries) ?
+        reportingSnapshot.AuditMatchingEntries : records.length;
+      const returnedCount = reportingSnapshot && Number.isFinite(reportingSnapshot.AuditReturnedEntries) ?
+        reportingSnapshot.AuditReturnedEntries : records.length;
+      const limit = reportingSnapshot && Number.isFinite(reportingSnapshot.AuditLimit) ?
+        reportingSnapshot.AuditLimit : 500;
+      $("audit-record-count").textContent = `Showing ${returnedCount} of ${matchingCount} matching events (maximum ${limit} per query).`;
+      renderReportingTable("audit-report-table",
+        ["Timestamp (UTC)", "Actor", "Category", "Severity", "Action", "Outcome", "Resource", "Client address", "Run ID", "Details", "Integrity"],
+        records.map((item) => [
+          item.Timestamp ? `${new Date(item.Timestamp).toLocaleString(undefined, { timeZone: "UTC" })} UTC` : "",
+          item.Actor, item.Category, item.Severity, item.Action, item.Outcome,
+          [item.ResourceType, item.ResourceName].filter(Boolean).join(": "),
+          item.ClientAddress, item.RunId, item.Details ? JSON.stringify(item.Details) : "", item.Integrity
+        ]));
+      $("export-audit-json").disabled = !reportingSnapshot;
+      $("export-audit-csv").disabled = !reportingSnapshot;
+    }
+
+    async function refreshAuditRecords() {
+      if (!reportingSnapshot) return;
+      const querySequence = ++auditQuerySequence;
+      const parameters = new URLSearchParams({ limit: "500" });
+      for (const [key, id] of [
+        ["search", "audit-search"], ["actor", "audit-actor-filter"],
+        ["category", "audit-category-filter"], ["severity", "audit-severity-filter"],
+        ["outcome", "audit-outcome-filter"], ["from", "audit-from-date"], ["to", "audit-to-date"]
+      ]) {
+        const value = $(id).value.trim();
+        if (value) parameters.set(key, value);
+      }
+      try {
+        const audit = await api(`/api/audit?${parameters.toString()}`);
+        if (querySequence !== auditQuerySequence) return;
+        reportingSnapshot.AuditRecords = audit.Records || [];
+        reportingSnapshot.AuditIntegrity = audit.Integrity;
+        reportingSnapshot.AuditMatchingEntries = audit.MatchingEntries;
+        reportingSnapshot.AuditReturnedEntries = audit.ReturnedEntries;
+        reportingSnapshot.AuditLimit = audit.Limit;
+        renderAuditRecords();
+        $("reporting-error").textContent = "";
+      } catch (error) {
+        if (querySequence !== auditQuerySequence) return;
+        $("reporting-error").textContent = `Audit records could not be loaded: ${error.message}`;
+      }
+    }
+
+    function downloadReportingFile(fileName, content, type) {
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function refreshStatusColors() {
+      for (const element of [$("run-status"), $("patch-status")]) {
+        element.classList.remove("status-success", "status-warning", "status-active", "status-error", "status-neutral");
+        const match = element.textContent.match(/failed|failure|error|blocked|skipped|warning|partially failed|partial|completed|succeeded|successful|passed|eligible|started|in.?progress|running|paused|resuming|pausing|stopped|pending/i);
+        if (match) {
+          const statusClass = getStatusColorClass(match[0].replace(/\s+/g, ""));
+          if (statusClass) element.classList.add(statusClass);
+        }
+      }
+    }
+
+    async function refreshReporting() {
+      $("reporting-error").textContent = "";
+      $("reporting-status").textContent = "Loading reporting data…";
+      $("refresh-reporting").disabled = true;
+      try {
+        reportingSnapshot = await api("/api/reporting?limit=500");
+        renderReportingTable("migration-report-table",
+          ["Report", "Generated", "Sources", "Targets", "Databases", "Completed", "Skipped", "Failed"],
+          (reportingSnapshot.MigrationReports || []).map((item) => [
+            item.Name, formatPatchDate(item.GeneratedAt), (item.Sources || []).join(", "),
+            (item.Targets || []).join(", "), item.DatabaseCount, item.CompletedCount,
+            item.SkippedCount, item.FailedCount
+          ]));
+        renderReportingTable("migration-server-object-report-table",
+          ["Report", "Source", "Target", "Source users / logins", "Source jobs", "Source linked servers", "Login/job migration", "Linked-server migration"],
+          (reportingSnapshot.MigrationReports || []).flatMap((report) =>
+            (report.ServerObjectReports || []).map((item) => [
+              report.Name, item.Source, item.Target, item.SourceLoginCount,
+              item.SourceAgentJobCount, item.SourceLinkedServerCount,
+              item.LoginMigrationStatus, item.LinkedServerMigrationStatus
+            ])));
+        renderReportingTable("patch-report-table",
+          ["Started", "Action", "KB", "Targets", "Status", "Exit code"],
+          (reportingSnapshot.PatchSummaries || []).map((item) => [
+            formatPatchDate(item.Timestamp), item.Action, item.KB, (item.Targets || []).join(", "),
+            item.Status, item.ExitCode
+          ]));
+        const logs = [
+          ...(reportingSnapshot.HostLogs || []).map((item) => ({
+            Timestamp: item.Timestamp, Source: "Host", Level: item.Level, Message: item.Message
+          })),
+          ...(reportingSnapshot.RunRecords || []).map((item) => ({
+            Timestamp: item.Timestamp, Source: `${item.Operation || "Run"} ${item.RecordType || ""}`,
+            Level: item.Status, Message: item.Message || item.Stage || ""
+          }))
+        ].sort((left, right) => String(right.Timestamp).localeCompare(String(left.Timestamp))).slice(0, 100);
+        renderReportingTable("logs-report-table", ["Timestamp", "Source", "Level / status", "Message"],
+          logs.map((item) => [item.Timestamp, item.Source, item.Level, item.Message]));
+        $("reporting-status").textContent = `Refreshed ${new Date(reportingSnapshot.RefreshedAt).toLocaleString()}.`;
+        $("export-reporting").disabled = false;
+        await refreshAuditRecords();
+      } catch (error) {
+        $("reporting-status").textContent = "Reporting data could not be loaded.";
+        $("reporting-error").textContent = error.message;
+        $("export-reporting").disabled = !reportingSnapshot;
+      } finally {
+        $("refresh-reporting").disabled = false;
+      }
+    }
+
+    $("refresh-reporting").addEventListener("click", refreshReporting);
+    for (const id of ["audit-search", "audit-actor-filter", "audit-outcome-filter", "audit-category-filter", "audit-severity-filter", "audit-from-date", "audit-to-date"]) {
+      $(id).addEventListener("input", () => {
+        clearTimeout(auditRefreshTimer);
+        auditRefreshTimer = setTimeout(refreshAuditRecords, 350);
+      });
+      $(id).addEventListener("change", () => {
+        clearTimeout(auditRefreshTimer);
+        auditRefreshTimer = setTimeout(refreshAuditRecords, 350);
+      });
+    }
+    $("export-audit-json").addEventListener("click", () => {
+      if (!reportingSnapshot) return;
+      const payload = {
+        ExportedAt: new Date().toISOString(),
+        Integrity: reportingSnapshot.AuditIntegrity,
+        Query: {
+          Search: $("audit-search").value,
+          Actor: $("audit-actor-filter").value,
+          Category: $("audit-category-filter").value,
+          Severity: $("audit-severity-filter").value,
+          Outcome: $("audit-outcome-filter").value,
+          From: $("audit-from-date").value,
+          To: $("audit-to-date").value,
+          MatchingEntries: reportingSnapshot.AuditMatchingEntries,
+          ReturnedEntries: reportingSnapshot.AuditReturnedEntries,
+          Limit: reportingSnapshot.AuditLimit
+        },
+        Records: getFilteredAuditRecords()
+      };
+      downloadReportingFile(`db-migration-audit-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+        JSON.stringify(payload, null, 2), "application/json");
+    });
+    $("export-audit-csv").addEventListener("click", () => {
+      if (!reportingSnapshot) return;
+      const columns = ["Timestamp", "Actor", "ActorType", "Category", "Severity", "Action", "Outcome", "ResourceType", "ResourceName", "ClientAddress", "RunId", "RequestId", "Details", "Integrity", "PreviousIntegrityHash", "IntegrityHash"];
+      const quote = (value) => {
+        let text = value == null ? "" : String(value);
+        if (/^[\u0000-\u0020]*[=+\-@]/.test(text)) text = `'${text}`;
+        return `"${text.replace(/"/g, '""')}"`;
+      };
+      const lines = [columns.map(quote).join(",")];
+      for (const item of getFilteredAuditRecords()) {
+        lines.push(columns.map((column) => quote(column === "Details" ? JSON.stringify(item.Details || {}) : item[column])).join(","));
+      }
+      downloadReportingFile(`db-migration-audit-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`,
+        `\uFEFF${lines.join("\r\n")}`, "text/csv;charset=utf-8");
+    });
+    $("export-reporting").addEventListener("click", () => {
+      if (!reportingSnapshot) return;
+      downloadReportingFile(`db-migration-report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+        JSON.stringify(reportingSnapshot, null, 2), "application/json");
+    });
+
+    function refreshLinkedServerPairSelector() {
+      const selector = $("linked-server-pair");
+      const selected = selector.value;
+      selector.replaceChildren();
+      pairs.forEach((pair, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = `Pair ${index + 1}: ${pair.Source || "[source]"} → ${pair.Target || "[target]"}`;
+        selector.append(option);
+      });
+      if (pairs.some((_, index) => String(index) === selected)) selector.value = selected;
+      renderLinkedServerRows();
+    }
+
+    function renderLinkedServerRows() {
+      const pair = pairs[Number($("linked-server-pair").value)];
+      const tbody = $("linked-server-rows");
+      tbody.replaceChildren();
+      if (!pair) return;
+      for (const [index, definition] of (pair.LinkedServers || []).entries()) {
+        const row = document.createElement("tr");
+        for (const [field, type, placeholder] of [
+          ["LinkedServer", "text", "Linked server name"],
+          ["Provider", "text", "MSOLEDBSQL"],
+          ["Product", "text", "SQL Server"],
+          ["DataSource", "text", "new-host\\instance"],
+          ["Catalog", "text", "Optional"]
+        ]) {
+          const cell = document.createElement("td");
+          const input = document.createElement("input");
+          input.type = type;
+          input.value = definition[field] || "";
+          input.placeholder = placeholder;
+          input.dataset.linkedIndex = String(index);
+          input.dataset.linkedField = field;
+          cell.append(input);
+          row.append(cell);
+        }
+        const securityCell = document.createElement("td");
+        const security = document.createElement("select");
+        security.dataset.linkedIndex = String(index);
+        security.dataset.linkedField = "SecurityMode";
+        for (const [value, label] of [
+          ["WithoutSecurityContext", "No login mapping"],
+          ["CurrentSecurityContext", "Current Windows context"],
+          ["SpecifiedSecurityContext", "SQL login + password"],
+          ["NoConnection", "No connection"]
+        ]) {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          security.append(option);
+        }
+        security.value = definition.SecurityMode || "WithoutSecurityContext";
+        securityCell.append(security);
+        row.append(securityCell);
+        for (const [field, type, placeholder] of [
+          ["RemoteUser", "text", "Remote SQL login"],
+          ["Password", "password", "Enter new password"]
+        ]) {
+          const cell = document.createElement("td");
+          const input = document.createElement("input");
+          input.type = type;
+          input.value = definition[field] || "";
+          input.placeholder = placeholder;
+          input.autocomplete = "new-password";
+          input.disabled = definition.SecurityMode !== "SpecifiedSecurityContext";
+          input.dataset.linkedIndex = String(index);
+          input.dataset.linkedField = field;
+          cell.append(input);
+          row.append(cell);
+        }
+        const removeCell = document.createElement("td");
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "secondary";
+        remove.textContent = "Remove";
+        remove.dataset.linkedAction = "remove";
+        remove.dataset.linkedIndex = String(index);
+        removeCell.append(remove);
+        row.append(removeCell);
+        tbody.append(row);
+      }
+      if (!pair.LinkedServers?.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 9;
+        cell.className = "muted";
+        cell.textContent = pair.LinkedServersLoaded
+          ? "No linked servers were found on this source. Add a definition if needed."
+          : "Load definitions from the selected source, or add a definition manually.";
+        row.append(cell);
+        tbody.append(row);
+      }
+    }
+
+    function clearLinkedServerPasswords() {
+      for (const pair of pairs) {
+        for (const definition of pair.LinkedServers || []) definition.Password = "";
+      }
+      for (const input of document.querySelectorAll("#linked-server-rows input[type='password']")) input.value = "";
+    }
+
+    async function loadLinkedServers() {
+      const pair = pairs[Number($("linked-server-pair").value)];
+      $("linked-server-error").textContent = "";
+      if (!pair?.Source?.trim()) {
+        $("linked-server-error").textContent = "Enter a source SQL instance before loading linked servers.";
+        return;
+      }
+      const button = $("load-linked-servers");
+      button.disabled = true;
+      $("linked-server-status").textContent = `Reading linked-server definitions from ${pair.Source}…`;
+      try {
+        const result = await api("/api/linked-servers", { Source: pair.Source });
+        pair.LinkedServers = (result.LinkedServers || []).map((definition) => ({ ...definition, Password: "" }));
+        pair.LinkedServersLoaded = true;
+        renderLinkedServerRows();
+        const mappingWarnings = pair.LinkedServers.filter((definition) =>
+          Number(definition.LinkedLoginMappingCount) > 1 ||
+          Number(definition.LocalPrincipalId) > 0);
+        const mappingNote = mappingWarnings.length
+          ? ` Login-mapping review required: ${mappingWarnings.map((definition) =>
+            `${definition.LinkedServer} (selected ${definition.LocalLogin || "specific login"}; ${definition.LinkedLoginMappingCount} mapping(s))`).join("; ")}. This workflow configures one mapping per linked server; recreate additional mappings on the target.`
+          : "";
+        $("linked-server-status").textContent = `${pair.LinkedServers.length} definition(s) loaded from ${pair.Source}. Review each destination before migration.${mappingNote}`;
+      } catch (error) {
+        $("linked-server-status").textContent = "Linked-server inventory did not complete.";
+        $("linked-server-error").textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function resetTransientSessionUi() {
+      stopLiveMonitor();
+      liveMonitorObservedRunId = null;
+      liveMonitorStartedByMigration = false;
+      liveMonitorMigrationPairs = [];
+      liveMonitorSelection.clear();
+      liveMonitorManualTargets.clear();
+      liveMonitorHistory.clear();
+      liveMonitorDiskCounters.clear();
+      renderLiveMonitorTargets();
+      $("live-monitor-results").replaceChildren();
+      $("live-monitor-error").textContent = "";
+      $("live-monitor-status").textContent = "Select one or more SQL instances to begin.";
+      for (const error of document.querySelectorAll('[id$="-error"]')) error.textContent = "";
+      const dialog = $("app-dialog");
+      if (dialog.open) dialog.close();
+      $("events").replaceChildren();
+      eventCursor = 0;
+      alertedFailure = false;
+      outcomes.clear();
+      selectedDatabaseTotal = 0;
+      activeDatabaseKey = null;
+      currentStagePercent = null;
+      renderMonitorProgress();
+      $("run-status").textContent = "Checking migration status…";
+      $("active-stage").textContent = "Waiting for migration status.";
+      $("monitor-current-job").textContent = "Waiting for migration status.";
+      $("monitor-current-pair").textContent = "No active migration pair.";
+      $("monitor-stage-name").textContent = "Waiting for migration progress.";
+      $("step-progress-label").textContent = "Waiting for first step.";
+      $("step-progress-percent").textContent = "0%";
+      $("step-progress-bar").style.width = "0%";
+      $("patch-status").textContent = "Checking patch status…";
+      updateOutcomes(selectedDatabaseTotal);
+      // Rebuild live job state silently on the next poll without replaying old logs or alerts.
+      suppressExistingEventReplay = true;
+    }
+
     function showApplication(authenticated, authMode = "Application", username = "") {
       const windowsAuth = authMode === "Windows";
+      if (authenticated !== applicationAuthenticated) resetTransientSessionUi();
+      applicationAuthenticated = authenticated;
       $("login-card").classList.toggle("hidden", authenticated || windowsAuth);
       $("application").classList.toggle("hidden", !authenticated);
+      $("app-navigation").classList.toggle("hidden", !authenticated);
       $("logout").classList.toggle("hidden", !authenticated || windowsAuth);
       $("current-user").textContent = authenticated && username ? `Signed in as ${username}` : "";
-      if (authenticated) initializePairs();
+      if (authenticated) {
+        initializePairs();
+      }
     }
+
+    try {
+      const savedSetupState = localStorage.getItem(migrationSetupStateKey);
+      if (savedSetupState === "false") $("migration-setup-details").open = false;
+    } catch (_) {}
+
+    function persistDisclosureState(id, key) {
+      $(id).addEventListener("toggle", () => {
+        try { localStorage.setItem(key, String($(id).open)); } catch (_) {}
+      });
+    }
+
+    try {
+      const savedPatchState = localStorage.getItem(patchPanelStateKey);
+      if (savedPatchState === "false") $("patch-panel").open = false;
+    } catch (_) {}
+
+    persistDisclosureState("migration-setup-details", migrationSetupStateKey);
+    persistDisclosureState("patch-panel", patchPanelStateKey);
+
+    $("app-navigation").addEventListener("click", (event) => {
+      const link = event.target.closest("a");
+      if (!link) return;
+      if (link.id === "reports-navigation-link") {
+        event.preventDefault();
+        $("application").classList.add("reports-view");
+        $("reporting-workspace").scrollIntoView({ block: "start" });
+        refreshReporting();
+        return;
+      }
+      $("application").classList.remove("reports-view");
+      if (link.hash === "#migration-setup") $("migration-setup-details").open = true;
+      if (link.hash === "#patch-panel") $("patch-panel").open = true;
+    });
 
     function saveSettings() {
       try {
@@ -415,11 +1502,14 @@
               Target: isTemplateValue(item.Target) ? "" : item.Target || "",
               BackupPath: /backup-share/i.test(item.BackupPath || "") ? "" : item.BackupPath || "",
               MigrationMode: migrationMode,
+              LinkedServers: [],
+              LinkedServersLoaded: false,
               databases: null
             };
           });
-        if (!pairs.length) pairs = [{ Source: "", Target: "", BackupPath: "", MigrationMode: "Full", databases: null }];
+        if (!pairs.length) pairs = [{ Source: "", Target: "", BackupPath: "", MigrationMode: "Full", LinkedServers: [], LinkedServersLoaded: false, databases: null }];
         renderPairs();
+        refreshLinkedServerPairSelector();
         refreshCustomSqlPairs();
       } catch (error) {
         $("discovery-error").textContent = error.message;
@@ -466,12 +1556,114 @@
         : "master";
     }
 
-    function renderCustomSqlResults(rows, columns) {
-      const container = $("custom-sql-results");
+    function normalizeCustomSqlColumns(rows, columns) {
+      if (Array.isArray(columns)) return columns;
+      if (typeof columns === "string") return [columns];
+      if (columns && typeof columns === "object") {
+        const values = Object.values(columns);
+        if (values.length > 0 && values.every((column) => typeof column === "string")) return values;
+      }
+      const firstRow = Array.isArray(rows) ? rows[0] : null;
+      return firstRow && typeof firstRow === "object" ? Object.keys(firstRow) : [];
+    }
+
+    function renderDiskUsageResults(results) {
+      const container = $("disk-usage-results");
+      const summary = $("disk-usage-summary");
+      container.replaceChildren();
+      summary.replaceChildren();
+      const volumeCount = results.reduce((count, result) => count + (result.disks || []).length, 0);
+      for (const [label, value] of [
+        ["Servers checked", results.filter((result) => result.succeeded).length],
+        ["Volumes found", volumeCount],
+        ["Servers failed", results.filter((result) => !result.succeeded).length]
+      ]) {
+        const metric = document.createElement("div");
+        metric.className = "patch-metric";
+        const strong = document.createElement("strong");
+        strong.textContent = String(value);
+        const text = document.createElement("span");
+        text.textContent = label;
+        metric.append(strong, text);
+        summary.append(metric);
+      }
+
+      for (const result of results) {
+        const card = document.createElement("section");
+        card.className = "disk-server-card";
+        const title = document.createElement("h3");
+        title.textContent = result.instance;
+        card.append(title);
+        if (result.computerName) {
+          const host = document.createElement("div");
+          host.className = "muted";
+          host.textContent = `Windows host: ${result.computerName}`;
+          card.append(host);
+        }
+        if (!result.succeeded) {
+          const error = document.createElement("div");
+          error.className = "error";
+          error.textContent = result.error || "Disk usage check failed.";
+          card.append(error);
+        } else if (!result.disks?.length) {
+          const empty = document.createElement("div");
+          empty.className = "muted";
+          empty.textContent = "No disk volumes were returned for this host.";
+          card.append(empty);
+        } else {
+          for (const disk of result.disks) {
+            const volume = document.createElement("div");
+            volume.className = "disk-volume";
+            const header = document.createElement("div");
+            header.className = "disk-volume-header";
+            const name = document.createElement("strong");
+            name.textContent = disk.volume;
+            const percent = Number(disk.percentUsed);
+            const percentText = document.createElement("span");
+            percentText.textContent = `${percent.toFixed(1)}% used`;
+            header.append(name, percentText);
+
+            const bar = document.createElement("div");
+            bar.className = "disk-bar";
+            bar.setAttribute("role", "meter");
+            bar.setAttribute("aria-label", `${disk.volume} used space`);
+            bar.setAttribute("aria-valuemin", "0");
+            bar.setAttribute("aria-valuemax", "100");
+            bar.setAttribute("aria-valuenow", String(percent));
+            const used = document.createElement("div");
+            used.className = `disk-bar-used${percent >= 90 ? " critical" : percent >= 80 ? " warning" : ""}`;
+            used.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+            bar.append(used);
+
+            const legend = document.createElement("div");
+            legend.className = "disk-volume-legend";
+            const usedText = document.createElement("span");
+            usedText.textContent = `Used: ${Number(disk.usedGB).toLocaleString(undefined, { maximumFractionDigits: 2 })} GB`;
+            const freeText = document.createElement("span");
+            freeText.textContent = `Free: ${Number(disk.freeGB).toLocaleString(undefined, { maximumFractionDigits: 2 })} GB of ${Number(disk.sizeGB).toLocaleString(undefined, { maximumFractionDigits: 2 })} GB`;
+            legend.append(usedText, freeText);
+            volume.append(header, bar, legend);
+            card.append(volume);
+          }
+        }
+        container.append(card);
+      }
+    }
+
+    function renderCustomSqlResults(rows, columns, container = $("custom-sql-results"), heading = "") {
+      columns = normalizeCustomSqlColumns(rows, columns);
       container.classList.remove("hidden");
       container.replaceChildren();
+      if (heading) {
+        const title = document.createElement("h3");
+        title.textContent = heading;
+        container.append(title);
+      }
       if (!rows || rows.length === 0) {
-        container.innerHTML = '<div class="muted">Query completed successfully but returned no rows.</div>';
+        const message = document.createElement("div");
+        message.className = "muted";
+        message.textContent = "Query completed successfully but returned no rows.";
+        container.append(message);
         return;
       }
       const table = document.createElement("table");
@@ -763,6 +1955,56 @@
       updatePatchControls(locked);
     }
 
+    function renderLiveMonitorTargets() {
+      const available = new Map([...liveMonitorManualTargets].map(([key, instance]) =>
+        [key, { instance, labels: ["Added instance"] }]));
+      pairs.forEach((pair, index) => {
+        for (const [role, value] of [["Source", pair.Source], ["Target", pair.Target]]) {
+          const instance = String(value || "").trim();
+          if (!instance) continue;
+          const key = instance.toLowerCase();
+          const label = `Pair ${index + 1} ${role.toLowerCase()}`;
+          if (!available.has(key)) available.set(key, { instance, labels: [] });
+          if (!available.get(key).labels.includes(label)) available.get(key).labels.push(label);
+        }
+      });
+      for (const pair of liveMonitorMigrationPairs) {
+        for (const [role, value] of [["Source", pair.Source], ["Target", pair.Target]]) {
+          const instance = String(value || "").trim();
+          if (!instance) continue;
+          const key = instance.toLowerCase();
+          if (!available.has(key)) available.set(key, { instance, labels: [] });
+          const label = `Active migration ${role.toLowerCase()}`;
+          if (!available.get(key).labels.includes(label)) available.get(key).labels.push(label);
+        }
+      }
+      for (const selected of liveMonitorSelection) {
+        if (!available.has(selected)) liveMonitorSelection.delete(selected);
+      }
+      const container = $("live-monitor-targets");
+      container.replaceChildren();
+      if (!available.size) {
+        const empty = document.createElement("span");
+        empty.className = "muted";
+        empty.textContent = "No configured SQL instances yet. Add one above or configure a migration pair.";
+        container.append(empty);
+        return;
+      }
+      for (const [key, target] of available) {
+        const label = document.createElement("label");
+        label.className = "live-monitor-target";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = key;
+        checkbox.checked = liveMonitorSelection.has(key);
+        checkbox.dataset.liveMonitorInstance = target.instance;
+        const description = document.createElement("span");
+        description.textContent = `${target.instance} · ${target.labels.join(", ")}`;
+        label.append(checkbox, description);
+        container.append(label);
+      }
+    }
+
     function renderPairs() {
       const list = $("pair-list");
       list.replaceChildren();
@@ -858,10 +2100,379 @@
       });
       $("add-pair").disabled = pairs.length >= 3 || migrationActive || validationActive;
       refreshCustomSqlPairs();
+      refreshLinkedServerPairSelector();
       renderPatchTargets();
+      renderLiveMonitorTargets();
       invalidatePatchAssessment("Pair configuration changed. Reassess before applying.");
       if (patchCatalogUpdatedAt) { void handlePatchTargetsChanged(); }
       updateStartButton();
+    }
+
+    function formatLiveMonitorValue(value, suffix = "") {
+      if (value === null || value === undefined || value === "") return "N/A";
+      const number = Number(value);
+      const formatted = Number.isFinite(number)
+        ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(number)
+        : String(value);
+      return `${formatted}${suffix}`;
+    }
+
+    function getLiveMonitorLevel(value, warning, critical) {
+      if (value === null || value === undefined || value === "") return "";
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "";
+      if (number >= critical) return "critical";
+      if (number >= warning) return "warning";
+      return "";
+    }
+
+    function renderLiveMonitorGauge(label, value, suffix, warning, critical, max = 100) {
+      const level = getLiveMonitorLevel(value, warning, critical);
+      const gauge = document.createElement("div");
+      gauge.className = "live-monitor-gauge";
+      gauge.setAttribute("role", "img");
+      gauge.setAttribute("aria-label", `${label}: ${formatLiveMonitorValue(value, suffix)}`);
+      const fill = document.createElement("div");
+      fill.className = `live-monitor-gauge-fill ${level}`;
+      fill.style.width = `${Math.min(100, Math.max(0, Number(value) / max * 100 || 0))}%`;
+      gauge.append(fill);
+      return gauge;
+    }
+
+    function renderLiveMonitorTrend(instance, label, key) {
+      const history = liveMonitorHistory.get(instance.toLowerCase()) || [];
+
+      const trend = document.createElement("div");
+      trend.className = "live-monitor-trend";
+      const title = document.createElement("strong");
+      title.textContent = `${label} · last ${history.length} snapshots`;
+      const chart = document.createElement("div");
+      chart.className = "live-monitor-sparkline";
+      chart.setAttribute("role", "img");
+      chart.setAttribute("aria-label", `${label} recent trend`);
+      for (const sample of history) {
+        const value = sample[key];
+        const bar = document.createElement("span");
+        const height = value === null || value === undefined ? 0 : Math.min(100, Math.max(0, value));
+        bar.style.height = `${height}%`;
+        bar.title = value === null || value === undefined ? "No sample" : `${formatLiveMonitorValue(value, "%")}`;
+        chart.append(bar);
+      }
+      trend.append(title, chart);
+      return trend;
+    }
+
+    function updateLiveMonitorDiskLatency(instance, disks) {
+      const instanceKey = instance.toLowerCase();
+      const previous = liveMonitorDiskCounters.get(instanceKey) || new Map();
+      const current = new Map();
+      for (const disk of disks || []) {
+        const volume = String(disk.volume || "").toLowerCase();
+        const counters = {
+          reads: Number(disk.numReads),
+          readStallMs: Number(disk.readStallMs),
+          writes: Number(disk.numWrites),
+          writeStallMs: Number(disk.writeStallMs)
+        };
+        const prior = previous.get(volume);
+        disk.avgReadLatencyMs = prior && counters.reads >= prior.reads && counters.readStallMs >= prior.readStallMs &&
+          counters.reads > prior.reads
+          ? (counters.readStallMs - prior.readStallMs) / (counters.reads - prior.reads)
+          : null;
+        disk.avgWriteLatencyMs = prior && counters.writes >= prior.writes && counters.writeStallMs >= prior.writeStallMs &&
+          counters.writes > prior.writes
+          ? (counters.writeStallMs - prior.writeStallMs) / (counters.writes - prior.writes)
+          : null;
+        current.set(volume, counters);
+      }
+      liveMonitorDiskCounters.set(instanceKey, current);
+    }
+
+    function renderLiveMonitorResults(results) {
+      const container = $("live-monitor-results");
+      container.replaceChildren();
+      for (const result of results || []) {
+        updateLiveMonitorDiskLatency(result.instance || "", result.disks);
+        const card = document.createElement("article");
+        card.className = "live-monitor-card";
+        const heading = document.createElement("div");
+        heading.className = "live-monitor-card-header";
+        const title = document.createElement("h3");
+        title.textContent = result.instance || "Unknown SQL instance";
+        const status = document.createElement("span");
+        status.className = `live-monitor-card-status ${getStatusColorClass(result.status)}`;
+        status.textContent = result.status || "Unknown";
+        heading.append(title, status);
+        card.append(heading);
+        const version = document.createElement("div");
+        version.className = "muted";
+        version.textContent = `${result.productVersion ? `SQL Server ${result.productVersion}` : "SQL version unavailable"} · Checked ${result.checkedAt ? new Date(result.checkedAt).toLocaleTimeString() : "—"}`;
+        card.append(version);
+
+        const alerts = [];
+        const hostCpuLevel = getLiveMonitorLevel(result.hostCpuPercent, 80, 95);
+        const sqlCpuLevel = getLiveMonitorLevel(result.sqlCpuPercent, 80, 95);
+        const memoryLevel = getLiveMonitorLevel(result.systemMemoryUsedPercent, 80, 90);
+        if (hostCpuLevel) alerts.push(`${hostCpuLevel === "critical" ? "Critical" : "High"} host CPU (${formatLiveMonitorValue(result.hostCpuPercent, "%")})`);
+        if (sqlCpuLevel) alerts.push(`${sqlCpuLevel === "critical" ? "Critical" : "High"} SQL CPU (${formatLiveMonitorValue(result.sqlCpuPercent, "%")})`);
+        if (memoryLevel) alerts.push(`${memoryLevel === "critical" ? "Critical" : "High"} system memory use (${formatLiveMonitorValue(result.systemMemoryUsedPercent, "%")})`);
+        if (Number(result.blockedRequests) > 0) {
+          alerts.push(`${Number(result.blockedRequests) > 5 ? "Critical" : "Warning"}: ${result.blockedRequests} blocked request(s)`);
+        }
+        if (Number(result.pendingMemoryGrants) > 0) {
+          alerts.push(`${Number(result.pendingMemoryGrants) > 5 ? "Critical" : "Warning"}: ${result.pendingMemoryGrants} pending memory grant(s)`);
+        }
+        for (const request of result.requests || []) {
+          const elapsedMs = Number(request.elapsedTimeMs);
+          if (elapsedMs >= 120000) {
+            alerts.push(`Critical: request in ${request.databaseName || "unknown database"} has run for ${formatLiveMonitorValue(elapsedMs / 1000, " sec")}`);
+          } else if (elapsedMs >= 30000) {
+            alerts.push(`Warning: request in ${request.databaseName || "unknown database"} has run for ${formatLiveMonitorValue(elapsedMs / 1000, " sec")}`);
+          }
+        }
+        for (const disk of result.disks || []) {
+          const diskLevel = getLiveMonitorLevel(disk.percentUsed, 80, 90);
+          if (diskLevel) alerts.push(`${diskLevel === "critical" ? "Critical" : "High"} disk use on ${disk.volume} (${formatLiveMonitorValue(disk.percentUsed, "%")})`);
+          for (const [latencyName, value] of [
+            ["read", disk.avgReadLatencyMs], ["write", disk.avgWriteLatencyMs]
+          ]) {
+            const latencyLevel = getLiveMonitorLevel(value, 20, 50);
+            if (latencyLevel) alerts.push(`${latencyLevel === "critical" ? "Critical" : "High"} disk ${latencyName} latency on ${disk.volume} (${formatLiveMonitorValue(value, " ms")})`);
+          }
+        }
+        const highestDiskUse = Math.max(-1, ...(result.disks || [])
+          .map((disk) => disk.percentUsed === null || disk.percentUsed === undefined ? NaN : Number(disk.percentUsed))
+          .filter(Number.isFinite));
+        const historyKey = (result.instance || "").toLowerCase();
+        const history = liveMonitorHistory.get(historyKey) || [];
+        history.push({
+          cpu: result.hostCpuPercent === null || result.hostCpuPercent === undefined ? null : Number(result.hostCpuPercent),
+          ram: result.systemMemoryUsedPercent === null || result.systemMemoryUsedPercent === undefined ? null : Number(result.systemMemoryUsedPercent),
+          disk: highestDiskUse >= 0 ? highestDiskUse : null
+        });
+        if (history.length > 20) history.shift();
+        liveMonitorHistory.set(historyKey, history);
+        const trendSection = document.createElement("div");
+        trendSection.className = "live-monitor-trends";
+        trendSection.append(
+          renderLiveMonitorTrend(result.instance || "", "Host CPU", "cpu"),
+          renderLiveMonitorTrend(result.instance || "", "System RAM", "ram"),
+          renderLiveMonitorTrend(result.instance || "", "Disk use (highest volume)", "disk")
+        );
+        card.append(trendSection);
+
+        const alertSection = document.createElement("div");
+        const criticalAlerts = Boolean(result.error) || alerts.some((alert) => alert.startsWith("Critical"));
+        alertSection.className = `live-monitor-alerts${criticalAlerts ? " critical" : alerts.length ? " warning" : ""}`;
+        alertSection.setAttribute("role", result.error || alerts.length ? "alert" : "status");
+        alertSection.textContent = result.error
+          ? `Performance monitoring unavailable: ${result.error}`
+          : alerts.length
+          ? `Performance alerts: ${alerts.join(" · ")}`
+          : "No threshold alerts in this snapshot.";
+        card.append(alertSection);
+
+        const metrics = document.createElement("div");
+        metrics.className = "live-monitor-metrics";
+        for (const [label, value, suffix] of [
+          ["Host CPU", result.hostCpuPercent, "%"],
+          ["SQL CPU", result.sqlCpuPercent, "%"],
+          ["System RAM used", result.systemMemoryUsedPercent, "%"],
+          ["SQL memory", result.sqlMemoryMB, " MB"],
+          ["User sessions", result.userSessions, ""],
+          ["Active requests", result.activeRequests, ""],
+          ["Blocked requests", result.blockedRequests, ""],
+          ["Pending memory grants", result.pendingMemoryGrants, ""],
+          ["SQL memory utilization", result.sqlMemoryUtilizationPercent, "%"],
+          ["Page life expectancy", result.pageLifeExpectancySeconds, " sec"]
+        ]) {
+          const metric = document.createElement("div");
+          metric.className = "live-monitor-metric";
+          const reading = document.createElement("strong");
+          reading.textContent = formatLiveMonitorValue(value, suffix);
+          const caption = document.createElement("span");
+          caption.textContent = label;
+          metric.append(reading, caption);
+          if (["Host CPU", "SQL CPU"].includes(label)) {
+            metric.append(renderLiveMonitorGauge(label, value, suffix, 80, 95));
+          } else if (label === "System RAM used") {
+            metric.append(renderLiveMonitorGauge(label, value, suffix, 80, 90));
+          }
+          metrics.append(metric);
+        }
+        card.append(metrics);
+
+        for (const [key, headingText] of [["requestError", "Active request details unavailable"], ["diskError", "Disk metrics unavailable"]]) {
+          if (!result[key]) continue;
+          const message = document.createElement("div");
+          message.className = "live-monitor-card-error";
+          message.textContent = `${headingText}: ${result[key]}`;
+          card.append(message);
+        }
+
+        const diskSection = document.createElement("section");
+        const diskHeading = document.createElement("h4");
+        diskHeading.textContent = `Disk volumes (${(result.disks || []).length})`;
+        diskSection.append(diskHeading);
+        if (result.disks?.length) {
+          for (const disk of result.disks) {
+            const item = document.createElement("div");
+            item.className = "live-monitor-disk";
+            const diskHeader = document.createElement("div");
+            diskHeader.className = "live-monitor-disk-header";
+            const volume = document.createElement("strong");
+            volume.textContent = disk.volume || "Unknown volume";
+            const capacity = document.createElement("small");
+            capacity.textContent = `${formatLiveMonitorValue(disk.percentUsed, "%")} used · ${formatLiveMonitorValue(disk.freeGB, " GB")} free / ${formatLiveMonitorValue(disk.sizeGB, " GB")}`;
+            diskHeader.append(volume, capacity);
+            item.append(diskHeader, renderLiveMonitorGauge(
+              `Disk ${disk.volume}`, disk.percentUsed, "%", 80, 90
+            ));
+            const latency = document.createElement("div");
+            latency.className = "live-monitor-disk-latency";
+            latency.textContent = `I/O latency since last sample · read ${formatLiveMonitorValue(disk.avgReadLatencyMs, " ms")} · write ${formatLiveMonitorValue(disk.avgWriteLatencyMs, " ms")}`;
+            item.append(latency);
+            diskSection.append(item);
+          }
+        } else if (!result.diskError) {
+          const empty = document.createElement("div");
+          empty.className = "muted";
+          empty.textContent = "No SQL Server data-file volumes were returned.";
+          diskSection.append(empty);
+        }
+        card.append(diskSection);
+
+        const requestsSection = document.createElement("section");
+        requestsSection.className = "live-monitor-requests";
+        const requestsHeading = document.createElement("h4");
+        requestsHeading.textContent = `Active requests (${(result.requests || []).length})`;
+        requestsSection.append(requestsHeading);
+        const requestRows = (result.requests || []).map((request) => [
+          request.databaseName, request.requestStatus, request.command, request.waitType,
+          request.blockingSessionId, request.cpuTimeMs, request.elapsedTimeMs, request.logicalReads
+        ]);
+        renderReportingTableInto(requestsSection, [
+          "Database", "Status", "Command", "Wait type", "Blocked by", "CPU ms", "Elapsed ms", "Reads"
+        ], requestRows, result.requestError
+          ? "Active request details could not be loaded."
+          : result.error ? "Performance data is unavailable." : "No active user requests.");
+        card.append(requestsSection);
+        container.append(card);
+      }
+    }
+
+    function renderReportingTableInto(container, headers, rows, emptyMessage) {
+      const table = document.createElement("table");
+      const thead = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      for (const header of headers) {
+        const cell = document.createElement("th");
+        cell.textContent = header;
+        headRow.append(cell);
+      }
+      thead.append(headRow);
+      const tbody = document.createElement("tbody");
+      if (!rows.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = headers.length;
+        cell.className = "muted";
+        cell.textContent = emptyMessage;
+        row.append(cell);
+        tbody.append(row);
+      }
+      else {
+        for (const values of rows) {
+          const row = document.createElement("tr");
+          values.forEach((value) => {
+            const cell = document.createElement("td");
+            cell.textContent = value === null || value === undefined || value === "" ? "—" : String(value);
+            row.append(cell);
+          });
+          tbody.append(row);
+        }
+      }
+      table.append(thead, tbody);
+      const wrap = document.createElement("div");
+      wrap.className = "table-wrap";
+      wrap.append(table);
+      container.append(wrap);
+    }
+
+    function getSelectedLiveMonitorInstances() {
+      return [...document.querySelectorAll("[data-live-monitor-instance]:checked")]
+        .map((checkbox) => checkbox.dataset.liveMonitorInstance);
+    }
+
+    async function refreshLiveMonitor() {
+      if (liveMonitorInProgress) return;
+      const generation = liveMonitorGeneration;
+      const instances = getSelectedLiveMonitorInstances();
+      $("live-monitor-error").textContent = "";
+      if (!instances.length) {
+        $("live-monitor-status").textContent = "Select one or more SQL instances to monitor.";
+        $("live-monitor-error").textContent = "No SQL instances are selected.";
+        return;
+      }
+      liveMonitorInProgress = true;
+      const controller = new AbortController();
+      liveMonitorAbortController = controller;
+      $("live-monitor-refresh").disabled = true;
+      $("live-monitor-start").disabled = true;
+      $("live-monitor-status").textContent = `Checking ${instances.length} SQL instance(s)…`;
+      try {
+        const response = await api("/api/live-monitor", {
+          SqlInstances: instances
+        }, controller.signal);
+        if (generation !== liveMonitorGeneration) return;
+        renderLiveMonitorResults(response.results);
+        $("live-monitor-status").textContent =
+          `Updated ${new Date(response.checkedAt).toLocaleTimeString()} · ${response.successCount} of ${response.targetCount} instance(s) online` +
+          (response.failureCount ? ` · ${response.failureCount} connection/performance failure(s)` : "");
+      } catch (error) {
+        if (generation !== liveMonitorGeneration) return;
+        $("live-monitor-error").textContent = error.message;
+        $("live-monitor-status").textContent = "Live monitoring refresh failed.";
+      } finally {
+        liveMonitorInProgress = false;
+        if (liveMonitorAbortController === controller) liveMonitorAbortController = null;
+        if (generation === liveMonitorGeneration) {
+          $("live-monitor-refresh").disabled = false;
+          $("live-monitor-start").disabled = liveMonitorTimer !== null;
+        }
+      }
+    }
+
+    function startLiveMonitor(startedByMigration = false) {
+      if (liveMonitorTimer !== null || !getSelectedLiveMonitorInstances().length) return;
+      liveMonitorStartedByMigration = startedByMigration;
+      for (const instance of getSelectedLiveMonitorInstances()) {
+        liveMonitorDiskCounters.delete(instance.toLowerCase());
+      }
+      liveMonitorTimer = setInterval(() => { void refreshLiveMonitor(); }, 15000);
+      $("live-monitor-start").disabled = true;
+      $("live-monitor-stop").disabled = false;
+      $("live-monitor-status").textContent = startedByMigration
+        ? "Migration source and target monitoring is active · refreshing every 15 seconds."
+        : "Monitoring is active · refreshing every 15 seconds.";
+      void refreshLiveMonitor();
+    }
+
+    function stopLiveMonitor() {
+      const wasRunning = liveMonitorTimer !== null;
+      liveMonitorStartedByMigration = false;
+      liveMonitorGeneration += 1;
+      liveMonitorAbortController?.abort();
+      if (liveMonitorTimer !== null) {
+        clearInterval(liveMonitorTimer);
+        liveMonitorTimer = null;
+      }
+      $("live-monitor-start").disabled = false;
+      $("live-monitor-refresh").disabled = false;
+      $("live-monitor-stop").disabled = true;
+      if (wasRunning) {
+        $("live-monitor-status").textContent = "Monitoring stopped.";
+      }
     }
 
     function renderPairValidation(validation) {
@@ -921,9 +2532,14 @@
     }
 
     function setCustomScope() {
-      const standalone = $("custom-scope").value === "Standalone";
-      $("custom-pair-controls").classList.toggle("hidden", standalone);
+      const scope = $("custom-scope").value;
+      const standalone = scope === "Standalone";
+      const multiple = scope === "Multiple";
+      $("custom-pair-controls").classList.toggle("hidden", standalone || multiple);
       $("custom-instance-controls").classList.toggle("hidden", !standalone);
+      $("custom-multiple-instance-controls").classList.toggle("hidden", !multiple);
+      $("custom-database").classList.toggle("hidden", multiple);
+      $("custom-multiple-database").classList.toggle("hidden", !multiple);
       refreshCustomSqlDatabases();
     }
 
@@ -1025,12 +2641,12 @@
       const table = document.createElement("table");
       const head = document.createElement("thead");
       const sizeHeading = pair.MigrationMode === "SchemaOnly" ? "Source size (not copied)" : "Size";
-      head.innerHTML = `<tr><th>Migrate</th><th>Database</th><th>${sizeHeading}</th><th>Compatibility</th><th>Target</th><th>Overwrite existing</th></tr>`;
+      head.innerHTML = `<tr><th>Migrate</th><th>Database</th><th>${sizeHeading}</th><th>Compatibility</th><th>TDE readiness</th><th>Target</th><th>Overwrite existing</th></tr>`;
       const body = document.createElement("tbody");
       if (!pair.databases.length) {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
-        cell.colSpan = 6;
+        cell.colSpan = 7;
         cell.className = "muted";
         cell.textContent = "No eligible databases were discovered.";
         row.append(cell);
@@ -1052,6 +2668,18 @@
         size.textContent = `${database.SizeGB} GB`;
         const compatibility = document.createElement("td");
         compatibility.textContent = database.CompatibilityLevel || "";
+        const tde = document.createElement("td");
+        tde.textContent = database.TdeEncrypted === null || database.TdeEncrypted === undefined
+          ? `TDE check failed · ${database.TdeMessage || "status unavailable"}`
+          : database.TdeEncrypted
+          ? (database.TdeTargetEncryptorReady === null
+            ? `Encrypted · ${database.TdeMessage || "target key not required for schema-only"}`
+            : database.TdeTargetEncryptorReady
+              ? `Encrypted · target key ready (${database.TdeEncryptorThumbprint})`
+              : `Encrypted · target key missing (${database.TdeEncryptorThumbprint})`)
+          : "Not encrypted";
+        tde.title = database.TdeMessage || "";
+        if (database.TdePreflight === "Failed") tde.className = "validation-failed";
         const target = document.createElement("td");
         target.textContent = database.TargetExists ? "Already exists" : "Not present";
         if (database.TargetExists) target.className = "target-exists";
@@ -1068,7 +2696,7 @@
           label.append(overwrite, document.createTextNode(" Replace it"));
           overwriteCell.append(label);
         } else overwriteCell.textContent = "—";
-        row.append(selectCell, name, size, compatibility, target, overwriteCell);
+        row.append(selectCell, name, size, compatibility, tde, target, overwriteCell);
         body.append(row);
       });
       table.append(head, body);
@@ -1105,7 +2733,16 @@
       const input = event.target.closest("[data-field]");
       if (!input) return;
       const pair = pairs[Number(input.dataset.pairIndex)];
-      pair[input.dataset.field] = input.value;
+      const fieldName = input.dataset.field;
+      if (fieldName === "Source" && pair.Source.trim().toLowerCase() !== input.value.trim().toLowerCase()) {
+        pair.LinkedServers = [];
+        pair.LinkedServersLoaded = false;
+        if (Number($("linked-server-pair").value) === Number(input.dataset.pairIndex)) {
+          $("linked-server-status").textContent = "Source changed; load and review its linked-server definitions again.";
+          $("linked-server-error").textContent = "";
+        }
+      }
+      pair[fieldName] = input.value;
       pair.databases = null;
       pair.validation = null;
       pair.summary = "Settings changed; run discovery again.";
@@ -1172,6 +2809,7 @@
           }
         }
         recordPairHistory(pair);
+        refreshLinkedServerPairSelector();
         return;
       }
       if (target.matches("[data-mode]")) {
@@ -1199,10 +2837,88 @@
 
     $("add-pair").addEventListener("click", () => {
       if (pairs.length >= 3) return;
-      pairs.push({ Source: "", Target: "", BackupPath: pairs[0]?.BackupPath || "", MigrationMode: "Full", databases: null });
+      pairs.push({ Source: "", Target: "", BackupPath: pairs[0]?.BackupPath || "", MigrationMode: "Full", LinkedServers: [], LinkedServersLoaded: false, databases: null });
       renderPairs();
       saveSettings();
     });
+
+    $("live-monitor-add-instance").addEventListener("click", () => {
+      const input = $("live-monitor-instance-input");
+      const instance = input.value.trim();
+      if (!instance) {
+        $("live-monitor-error").textContent = "Enter a SQL hostname or instance name.";
+        return;
+      }
+      if (instance.length > 256 || /[\r\n]/.test(instance)) {
+        $("live-monitor-error").textContent = "Enter one SQL instance name of no more than 256 characters.";
+        return;
+      }
+      const key = instance.toLowerCase();
+      if (!liveMonitorSelection.has(key) && liveMonitorSelection.size >= 10) {
+        $("live-monitor-error").textContent = "Monitor no more than 10 SQL instances at a time.";
+        return;
+      }
+      liveMonitorManualTargets.set(key, instance);
+      liveMonitorSelection.add(key);
+      input.value = "";
+      $("live-monitor-error").textContent = "";
+      renderLiveMonitorTargets();
+      if (liveMonitorTimer !== null) void refreshLiveMonitor();
+    });
+    $("live-monitor-instance-input").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        $("live-monitor-add-instance").click();
+      }
+    });
+    $("live-monitor-add-pair-instances").addEventListener("click", () => {
+      const selection = new Set(liveMonitorSelection);
+      for (const pair of pairs) {
+        for (const value of [pair.Source, pair.Target]) {
+          const instance = String(value || "").trim();
+          if (instance) selection.add(instance.toLowerCase());
+        }
+      }
+      if (selection.size > 10) {
+        $("live-monitor-error").textContent = "Monitor no more than 10 SQL instances at a time.";
+        return;
+      }
+      liveMonitorSelection.clear();
+      for (const instance of selection) liveMonitorSelection.add(instance);
+      renderLiveMonitorTargets();
+      $("live-monitor-error").textContent = "";
+      if (liveMonitorTimer !== null) void refreshLiveMonitor();
+    });
+    $("live-monitor-targets").addEventListener("change", (event) => {
+      const checkbox = event.target.closest("[data-live-monitor-instance]");
+      if (!checkbox) return;
+      if (checkbox.checked) liveMonitorSelection.add(checkbox.value);
+      else liveMonitorSelection.delete(checkbox.value);
+      if (getSelectedLiveMonitorInstances().length > 10) {
+        checkbox.checked = false;
+        liveMonitorSelection.delete(checkbox.value);
+        $("live-monitor-error").textContent = "Monitor no more than 10 SQL instances at a time.";
+        return;
+      }
+      $("live-monitor-error").textContent = "";
+      if (!getSelectedLiveMonitorInstances().length && liveMonitorTimer !== null) {
+        stopLiveMonitor();
+        $("live-monitor-status").textContent = "Select one or more SQL instances to begin.";
+        $("live-monitor-results").replaceChildren();
+        return;
+      }
+      if (liveMonitorTimer !== null) void refreshLiveMonitor();
+    });
+    $("live-monitor-start").addEventListener("click", async () => {
+      if (!getSelectedLiveMonitorInstances().length) {
+        $("live-monitor-error").textContent = "Select one or more SQL instances before starting monitoring.";
+        return;
+      }
+      $("live-monitor-error").textContent = "";
+      startLiveMonitor(false);
+    });
+    $("live-monitor-refresh").addEventListener("click", () => { void refreshLiveMonitor(); });
+    $("live-monitor-stop").addEventListener("click", stopLiveMonitor);
 
     $("remember-settings").addEventListener("change", saveSettings);
     $("standalone-sql-instance").setAttribute("list", "history-servers");
@@ -1226,8 +2942,67 @@
           if (checkbox.checked) linkedServers.checked = false;
           linkedServers.disabled = checkbox.checked;
         }
+        if (checkbox.dataset.option === "ConfigureLinkedServers" || checkbox.dataset.option === "SkipLinkedServers") {
+          const enabled = document.querySelector('[data-option="ConfigureLinkedServers"]').checked &&
+            !document.querySelector('[data-option="SkipLinkedServers"]').checked;
+          $("linked-server-setup").classList.toggle("hidden", !enabled);
+          if (!enabled) clearLinkedServerPasswords();
+          if (enabled) refreshLinkedServerPairSelector();
+        }
         updateStartButton();
       }));
+
+    $("linked-server-pair").addEventListener("change", renderLinkedServerRows);
+    $("load-linked-servers").addEventListener("click", loadLinkedServers);
+    $("add-linked-server").addEventListener("click", () => {
+      const pair = pairs[Number($("linked-server-pair").value)];
+      if (!pair) return;
+      pair.LinkedServers ||= [];
+      pair.LinkedServers.push({
+        LinkedServer: "",
+        Provider: "MSOLEDBSQL",
+        Product: "SQL Server",
+        DataSource: "",
+        Catalog: "",
+        SecurityMode: "WithoutSecurityContext",
+        RemoteUser: "",
+        Password: ""
+      });
+      pair.LinkedServersLoaded = true;
+      $("linked-server-status").textContent = "Manual definition added. Review all fields before migration.";
+      $("linked-server-error").textContent = "";
+      renderLinkedServerRows();
+    });
+    $("linked-server-rows").addEventListener("input", (event) => {
+      const input = event.target.closest?.("[data-linked-field]");
+      if (!input) return;
+      const pair = pairs[Number($("linked-server-pair").value)];
+      const definition = pair?.LinkedServers?.[Number(input.dataset.linkedIndex)];
+      if (definition) definition[input.dataset.linkedField] = input.value;
+    });
+    $("linked-server-rows").addEventListener("change", (event) => {
+      const input = event.target.closest?.("[data-linked-field]");
+      if (input) {
+        const pair = pairs[Number($("linked-server-pair").value)];
+        const definition = pair?.LinkedServers?.[Number(input.dataset.linkedIndex)];
+        if (!definition) return;
+        definition[input.dataset.linkedField] = input.value;
+        if (input.dataset.linkedField === "SecurityMode") {
+          if (input.value !== "SpecifiedSecurityContext") {
+            definition.RemoteUser = "";
+            definition.Password = "";
+          }
+          renderLinkedServerRows();
+        }
+      }
+    });
+    $("linked-server-rows").addEventListener("click", (event) => {
+      const remove = event.target.closest?.("[data-linked-action='remove']");
+      if (!remove) return;
+      const pair = pairs[Number($("linked-server-pair").value)];
+      pair?.LinkedServers?.splice(Number(remove.dataset.linkedIndex), 1);
+      renderLinkedServerRows();
+    });
 
     function setRunControlsLocked(locked) {
       for (const control of document.querySelectorAll("#pair-list input, #pair-list select, #pair-list button, [data-option], #remember-settings, #add-pair")) {
@@ -1266,8 +3041,13 @@
 
     $("pause-run").addEventListener("click", () => sendRunControl("Pause"));
     $("resume-run").addEventListener("click", () => sendRunControl("Resume"));
-    $("stop-run").addEventListener("click", () => {
-      if (confirm("Stop at the next safe boundary? The current database or server-object stage will finish first.")) {
+    $("stop-run").addEventListener("click", async () => {
+      if (await showAppDialog({
+        title: "Stop migration?",
+        message: "Stop at the next safe boundary? The current database or server-object stage will finish first.",
+        confirm: true,
+        confirmLabel: "Stop safely"
+      })) {
         sendRunControl("Stop");
       }
     });
@@ -1338,7 +3118,12 @@
     $("download-patch").addEventListener("click", async () => {
       const kb = $("patch-catalog").value;
       const updatePath = $("patch-update-path").value.trim();
-      if (!confirm(`Download KB${kb} from Microsoft into:\n\n${updatePath}\n\nThe package will not be installed until you explicitly apply it.`)) return;
+      if (!await showAppDialog({
+        title: `Download KB${kb}?`,
+        message: `Download from Microsoft into:\n\n${updatePath}\n\nThe package will not be installed until you explicitly apply it.`,
+        confirm: true,
+        confirmLabel: "Download"
+      })) return;
       await startPatchWorker("Download", { KB: kb, UpdatePath: updatePath });
     });
 
@@ -1363,35 +3148,89 @@
         ? `Individual instance: ${SqlInstance}`
         : `Pair ${PairIndex + 1} ${Role}: ${pairs[PairIndex]?.[Role] || "unknown"}`);
       const rebootNote = restart ? "The Windows host may be restarted." : "Windows host restart is disabled.";
-      if (!confirm(`Apply KB${kb} only to these eligible SQL instances?\n\n${selectedNames.join("\n")}\n\nSQL services may restart. ${rebootNote}\n\nConfirm you have a maintenance window and a recoverable backup.`)) return;
+      if (!await showAppDialog({
+        title: `Apply KB${kb}?`,
+        message: `Apply only to these eligible SQL instances?\n\n${selectedNames.join("\n")}\n\nSQL services may restart. ${rebootNote}\n\nConfirm you have a maintenance window and a recoverable backup.`,
+        confirm: true,
+        confirmLabel: "Apply patch"
+      })) return;
       await startPatchWorker("Apply", { KB: kb, Targets: targets, UpdatePath: updatePath, Restart: restart });
     });
 
     $("run-custom-sql").addEventListener("click", async () => {
-      const isStandalone = $("custom-scope").value === "Standalone";
+      const scope = $("custom-scope").value;
+      const isStandalone = scope === "Standalone";
+      const isMultiple = scope === "Multiple";
       const pairIndex = Number($("custom-pair-index").value);
       const pair = pairs[pairIndex];
       const standaloneInput = $("standalone-sql-instance").value.trim();
       const query = $("custom-query").value.trim();
-      const database = $("custom-database").value.trim();
+      const database = (isMultiple ? $("custom-multiple-database").value : $("custom-database").value).trim() || "master";
       const serverRole = $("custom-server-role").value;
+      const sqlInstances = isMultiple
+        ? [...new Map($("custom-sql-instances").value.split(/\r?\n/)
+          .flatMap((line) => line.split(/,(?=\s*(?!\d+\s*(?:,|$))\S)/))
+          .map((name) => name.trim()).filter(Boolean)
+          .map((name) => [name.toLowerCase(), name])).values()]
+        : [];
       $("custom-sql-error").textContent = "";
+      $("custom-sql-results").classList.add("hidden");
       if (isStandalone && (!standaloneInstanceInfo || standaloneSqlInstance !== standaloneInput)) {
         $("custom-sql-error").textContent = "Validate and discover the individual SQL instance before running a query.";
         return;
       }
-      if (!isStandalone && !pair) {
+      if (isMultiple && !sqlInstances.length) {
+        $("custom-sql-error").textContent = "Enter at least one SQL instance, one per line.";
+        return;
+      }
+      if (scope === "Pair" && !pair) {
         $("custom-sql-error").textContent = "Select a configured pair first.";
         return;
       }
-      $("custom-sql-status").textContent = "Running custom SQL…";
+      if (isMultiple && !await showAppDialog({
+        title: "Run SQL on multiple instances?",
+        message: `Run sequentially against ${sqlInstances.length} SQL instance(s), using database "${database}"?\n\n${sqlInstances.join("\n")}\n\nReview the statement and all targets carefully. SQL changes may be irreversible.`,
+        confirm: true,
+        confirmLabel: "Run SQL"
+      })) return;
+      $("custom-sql-status").textContent = isMultiple
+        ? `Running custom SQL sequentially on ${sqlInstances.length} SQL instance(s)…`
+        : "Running custom SQL…";
       try {
-        const body = isStandalone
+        const body = isMultiple
+          ? { SqlInstances: sqlInstances, Database: database, Query: query }
+          : isStandalone
           ? { SqlInstance: standaloneSqlInstance, Database: database, Query: query }
           : { PairIndex: pairIndex, ServerRole: serverRole, SqlInstance: pair?.[serverRole] || "", Database: database, Query: query };
         const result = await api("/api/custom-sql", body);
-        $("custom-sql-status").textContent = `Execution finished on ${result.instance} (${result.serverRole}) in ${result.elapsedMilliseconds} ms. Rows: ${result.rowCount}`;
-        renderCustomSqlResults(result.rows || [], result.columns || []);
+        if (isMultiple) {
+          const successful = result.results.filter((item) => item.succeeded);
+          const failed = result.results.filter((item) => !item.succeeded);
+          $("custom-sql-status").textContent = `Completed on ${successful.length} of ${result.targetCount} SQL instance(s) in ${result.elapsedMilliseconds} ms.`;
+          $("custom-sql-error").textContent = failed.map((item) => `${item.instance}: ${item.error}`).join("\n");
+          const container = $("custom-sql-results");
+          container.classList.remove("hidden");
+          container.replaceChildren();
+          for (const item of result.results) {
+            const section = document.createElement("section");
+            section.style.marginTop = "12px";
+            const heading = `${item.instance} · ${item.database} · ${item.succeeded ? `Success · ${item.rowCount} row(s)` : "Failed"}`;
+            if (item.succeeded) {
+              renderCustomSqlResults(item.rows || [], item.columns || [], section, heading);
+            } else {
+              const title = document.createElement("h3");
+              title.textContent = heading;
+              const message = document.createElement("div");
+              message.className = "error";
+              message.textContent = item.error;
+              section.append(title, message);
+            }
+            container.append(section);
+          }
+        } else {
+          $("custom-sql-status").textContent = `Execution finished on ${result.instance} (${result.serverRole}) in ${result.elapsedMilliseconds} ms. Rows: ${result.rowCount}`;
+          renderCustomSqlResults(result.rows || [], result.columns || []);
+        }
       } catch (error) {
         $("custom-sql-status").textContent = "Custom SQL failed.";
         $("custom-sql-error").textContent = error.message;
@@ -1402,25 +3241,84 @@
     $("clear-custom-sql").addEventListener("click", () => {
       $("custom-query").value = "";
       $("custom-database").value = "";
+      $("custom-multiple-database").value = "master";
+      $("custom-sql-instances").value = "";
       $("custom-sql-error").textContent = "";
       $("custom-sql-status").textContent = "";
       $("custom-sql-results").classList.add("hidden");
       $("custom-sql-results").replaceChildren();
     });
 
+    $("check-disk-usage").addEventListener("click", async () => {
+      const sqlInstances = [...new Map($("disk-sql-instances").value.split(/\r?\n/)
+        .flatMap((line) => line.split(/,(?=\s*(?!\d+\s*(?:,|$))\S)/))
+        .map((name) => name.trim()).filter(Boolean)
+        .map((name) => [name.toLowerCase(), name])).values()];
+      const button = $("check-disk-usage");
+      $("disk-usage-error").textContent = "";
+      $("disk-usage-summary").replaceChildren();
+      $("disk-usage-results").replaceChildren();
+      if (!sqlInstances.length) {
+        $("disk-usage-error").textContent = "Enter at least one SQL instance.";
+        $("disk-usage-status").textContent = "";
+        return;
+      }
+      if (sqlInstances.length > 50) {
+        $("disk-usage-error").textContent = "Check no more than 50 SQL instances at a time.";
+        $("disk-usage-status").textContent = "";
+        return;
+      }
+
+      button.disabled = true;
+      $("disk-usage-status").textContent = `Checking disk usage on ${sqlInstances.length} SQL instance(s)…`;
+      try {
+        const result = await api("/api/disk-usage", { SqlInstances: sqlInstances });
+        renderDiskUsageResults(result.results);
+        $("disk-usage-status").textContent =
+          `Checked ${result.successCount} of ${result.targetCount} server(s); ${result.failureCount} failed.`;
+      } catch (error) {
+        $("disk-usage-status").textContent = "Disk usage check failed.";
+        $("disk-usage-error").textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+
     $("login-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       $("login-error").textContent = "";
       try {
-        await api("/api/login", { Username: $("username").value, Password: $("password").value });
+        const username = $("username").value.trim();
+        await api("/api/login", { Username: username, Password: $("password").value });
+        try {
+          if ($("remember-username").checked) localStorage.setItem(rememberedUsernameKey, username);
+          else localStorage.removeItem(rememberedUsernameKey);
+        } catch (error) {
+          $("login-error").textContent = `Signed in, but the username could not be saved: ${error.message}`;
+        }
         $("password").value = "";
-        showApplication(true, "Application", $("username").value);
+        showApplication(true, "Application", username);
       } catch (error) {
         $("login-error").textContent = error.message;
       }
     });
 
+    try {
+      const rememberedUsername = localStorage.getItem(rememberedUsernameKey);
+      if (rememberedUsername) {
+        $("username").value = rememberedUsername;
+        $("remember-username").checked = true;
+      }
+    } catch (_) {}
+
+    $("remember-username").addEventListener("change", () => {
+      if (!$("remember-username").checked) {
+        try { localStorage.removeItem(rememberedUsernameKey); } catch (_) {}
+      }
+    });
+
     $("logout").addEventListener("click", async () => {
+      clearLinkedServerPasswords();
       try { await api("/api/logout", {}); } finally { showApplication(false); }
     });
 
@@ -1437,6 +3335,13 @@
         }))
       }));
       const selectedCount = planPairs.reduce((sum, pair) => sum + pair.Databases.length, 0);
+      const tdeBlocked = pairs.flatMap((pair) => (pair.databases || [])
+        .filter((database) => database.Selected && database.TdePreflight === "Failed")
+        .map((database) => `${pair.Source} → ${pair.Target}: ${database.Database} — ${database.TdeMessage}`));
+      if (tdeBlocked.length) {
+        $("migration-error").textContent = `TDE preflight must pass before migration:\n${tdeBlocked.join("\n")}\nInstall the required encryptor on each target, then refresh discovery.`;
+        return;
+      }
       const missingBackupPath = pairs.find((pair) => pair.databases && !String(pair.BackupPath || "").trim());
       if (missingBackupPath) {
         $("migration-error").textContent =
@@ -1449,26 +3354,63 @@
       const options = Object.fromEntries([...document.querySelectorAll("[data-option]")]
         .map((checkbox) => [checkbox.dataset.option, checkbox.checked]));
       if (options.SkipLinkedServers) options.ConfigureLinkedServers = false;
+      const configureLinkedServers = options.ConfigureLinkedServers && !options.SkipLinkedServers;
+      if (configureLinkedServers) {
+        const unloadedPair = planPairs.find((planPair) => {
+          const pair = pairs.find((item) => item.Source === planPair.Source && item.Target === planPair.Target);
+          return !pair?.LinkedServersLoaded;
+        });
+        if (unloadedPair) {
+          $("migration-error").textContent = `Load linked-server definitions for ${unloadedPair.Source} before starting this run.`;
+          return;
+        }
+        for (const planPair of planPairs) {
+          const pair = pairs.find((item) => item.Source === planPair.Source && item.Target === planPair.Target);
+          planPair.LinkedServersLoaded = Boolean(pair?.LinkedServersLoaded);
+          planPair.LinkedServers = (pair?.LinkedServers || []).map((definition) => ({ ...definition }));
+        }
+      }
       const hasServerActions = ["MigrateLogins", "MigrateAgentJobs", "MigrateAgentOperators", "ConfigureLinkedServers"]
         .some((key) => options[key]);
       if (!selectedCount && !hasServerActions) {
         $("migration-error").textContent = "Select at least one database or server-level migration option, and discover each pair first.";
         return;
       }
-      if (overwriteList.length && !confirm(`These target databases will be replaced:\n\n${overwriteList.join("\n")}\n\nContinue?`)) return;
+      if (overwriteList.length && !await showAppDialog({
+        title: "Replace target databases?",
+        message: `These target databases will be replaced:\n\n${overwriteList.join("\n")}\n\nContinue?`,
+        kind: "warning",
+        confirm: true,
+        confirmLabel: "Replace"
+      })) return;
       const pairSummary = planPairs.map((pair) =>
         `${pair.Source} → ${pair.Target} (${pair.Databases.length} database(s); ${pair.MigrationMode === "SchemaOnly" ? "SCHEMA ONLY, NO TABLE DATA" : "full database"})`)
         .join("\n");
-      if (!confirm(`Run pairs and databases sequentially in this order?\n\n${pairSummary}\n\nSchema-only mode replaces an existing target only when its per-database overwrite box is checked. It creates an empty schema copy and does not migrate table data. Linked servers are controlled separately by the server-object option.`)) return;
+      const linkedServerSummary = configureLinkedServers
+        ? `\n\nLinked-server definitions to configure: ${planPairs.reduce((count, pair) => count + pair.LinkedServers.length, 0)}. Existing same-name linked servers on targets are left unchanged; review them separately. Linked-server passwords are sent for this run only and are not persisted.`
+        : "";
+      if (!await showAppDialog({
+        title: "Start migration?",
+        message: `Run pairs and databases sequentially in this order?\n\n${pairSummary}\n\nSchema-only mode replaces an existing target only when its per-database overwrite box is checked. It creates an empty schema copy and does not migrate table data. Linked servers are controlled separately by the server-object option.${linkedServerSummary}`,
+        confirm: true,
+        confirmLabel: "Start migration"
+      })) return;
       $("start").disabled = true;
       try {
-        const result = await api("/api/migrate", {
-          Pairs: planPairs,
-          Options: options
-        });
+        let result;
+        try {
+          result = await api("/api/migrate", { Pairs: planPairs, Options: options });
+        } finally {
+          clearLinkedServerPasswords();
+          planPairs.forEach((pair) => pair.LinkedServers?.forEach((definition) => { definition.Password = ""; }));
+          renderLinkedServerRows();
+        }
         eventCursor = 0;
+        suppressExistingEventReplay = false;
         outcomes.clear();
         selectedDatabaseTotal = selectedCount;
+        activeDatabaseKey = null;
+        currentStagePercent = null;
         alertedFailure = false;
         migrationActive = true;
         controlAction = "Run";
@@ -1477,6 +3419,12 @@
         $("active-stage").textContent = `Sequential run across ${result.Pairs.length} pair(s)`;
         $("events").replaceChildren();
         $("progress-bar").style.width = "0%";
+        $("monitor-stage-ring").style.setProperty("--stage-progress", "0%");
+        $("monitor-stage-ring").setAttribute("aria-valuenow", "0");
+        $("monitor-stage-percent").textContent = "0%";
+        $("monitor-stage-name").textContent = "Waiting for migration progress.";
+        $("monitor-current-job").textContent = "Waiting for the first database job.";
+        $("monitor-current-pair").textContent = `Sequential run across ${result.Pairs.length} pair(s)`;
         $("step-progress-bar").style.width = "0%";
         $("step-progress-percent").textContent = "0%";
         $("step-progress-label").textContent = "Waiting for first step.";
@@ -1488,16 +3436,67 @@
       }
     });
 
-    function appendEvent(item) {
-      const line = document.createElement("div");
-      line.className = `event ${String(item.Status || "").toLowerCase()}`;
-      const time = new Date(item.Timestamp).toLocaleTimeString();
+    async function appendEvent(item, { display = true, notify = true } = {}) {
       const database = item.Database && item.Database !== "*" ? `${item.Database} / ` : "";
-      line.textContent = `[${time}] [${item.Status}] ${database}${item.Stage}: ${item.Message || ""}`;
-      $("events").append(line);
-      $("events").scrollTop = $("events").scrollHeight;
+      if (display) {
+        const line = document.createElement("div");
+        line.className = `event ${String(item.Status || "").toLowerCase()}`;
+        const time = new Date(item.Timestamp).toLocaleTimeString();
+        line.textContent = `[${time}] [${item.Status}] ${database}${item.Stage}: ${item.Message || ""}`;
+        $("events").append(line);
+        $("events").scrollTop = $("events").scrollHeight;
+      }
+      const pairName = [item.Source, item.Target].filter(Boolean).join(" → ");
+      const databaseKey = item.Database
+        ? `${item.Source}\u0000${item.Target}\u0000${item.Database}`
+        : null;
+      if (item.Stage === "InstanceSequence" && item.Status === "Started") {
+        $("monitor-current-job").textContent = "Preparing source/target pair";
+        $("monitor-current-pair").textContent = pairName || item.Message || "Starting pair";
+      }
+      if (item.Stage === "DatabaseSequence" && item.Status === "Started" && item.Database) {
+        activeDatabaseKey = databaseKey;
+        $("monitor-current-job").textContent = item.Database;
+        $("monitor-current-pair").textContent = pairName || "Source/target pair";
+      }
       if (item.Stage === "DatabaseOutcome" && item.Database) {
-        outcomes.set(`${item.Source}\u0000${item.Target}\u0000${item.Database}`, item.Status);
+        outcomes.set(databaseKey, item.Status);
+        if (activeDatabaseKey === databaseKey) {
+          activeDatabaseKey = null;
+          $("monitor-current-job").textContent = item.Status === "Failed"
+            ? `Failed: ${item.Database}`
+            : `${item.Database} ${item.Status.toLowerCase()}`;
+        }
+      } else if (item.Stage === "DatabaseSequence" && item.Status === "Failed" && item.Database) {
+        outcomes.set(databaseKey, "Failed");
+        if (activeDatabaseKey === databaseKey) {
+          activeDatabaseKey = null;
+        }
+        $("monitor-current-job").textContent = `Failed: ${item.Database}`;
+      }
+      if (item.Stage === "InstanceSequence" && item.Status === "Failed") {
+        $("monitor-current-job").textContent = "Source/target pair failed";
+      }
+      if (item.Stage === "InstanceSequence" && item.Status === "Completed") {
+        $("monitor-current-job").textContent = "Source/target pair completed";
+      }
+      if (item.Stage === "Migration" && ["Completed", "Failed", "Stopped"].includes(item.Status)) {
+        activeDatabaseKey = null;
+        $("monitor-current-job").textContent = item.Status === "Completed"
+          ? "All selected work completed"
+          : item.Status === "Stopped" ? "Migration stopped at a safe boundary" : "Migration failed";
+      }
+      if (!["Migration", "RunControl"].includes(item.Stage) && item.Database !== "*") {
+        currentStagePercent = Number.isInteger(item.PercentComplete)
+          ? Math.max(0, Math.min(100, item.PercentComplete))
+          : (item.Status === "Completed" || item.Status === "Skipped" ? 100 : null);
+        renderMonitorProgress();
+        $("monitor-stage-name").textContent = `${item.Stage} · ${item.Status}${item.Message ? ` — ${item.Message}` : ""}`;
+      }
+      if (item.Stage === "DatabaseOutcome" && item.Database) {
+        updateOutcomes(selectedDatabaseTotal);
+      }
+      if (item.Stage === "DatabaseSequence" && ["Failed", "Started"].includes(item.Status)) {
         updateOutcomes(selectedDatabaseTotal);
       }
       if (["Started", "InProgress"].includes(item.Status)) {
@@ -1530,8 +3529,14 @@
       }
       if (item.Status === "Failed" && !alertedFailure) {
         alertedFailure = true;
-        const failureType = item.Stage === "ProcessOutput" ? "Operation error" : "Migration error";
-        alert(`${failureType}${database ? ` for ${database}` : ""}:\n${item.Message || item.Stage}`);
+        if (notify) {
+          const failureType = item.Stage === "ProcessOutput" ? "Operation error" : "Migration error";
+          await showAppDialog({
+            title: `${failureType}${database ? ` for ${database}` : ""}`,
+            message: item.Message || item.Stage,
+            kind: "error"
+          });
+        }
       }
       if (item.Stage === "Migration" && ["Completed", "Failed", "Stopped"].includes(item.Status)) {
         migrationActive = false;
@@ -1539,7 +3544,18 @@
         $("run-status").textContent = item.Status;
         $("start").disabled = false;
         setRunControlsLocked(false);
+        updateOutcomes(selectedDatabaseTotal);
       }
+    }
+
+    function renderMonitorProgress() {
+      const percent = currentStagePercent;
+      const ring = $("monitor-stage-ring");
+      ring.setAttribute("aria-valuenow", percent === null ? "0" : String(percent));
+      ring.setAttribute("aria-valuetext", percent === null ? "Live percentage unavailable" : `${percent}%`);
+      ring.classList.toggle("indeterminate", percent === null);
+      ring.style.setProperty("--stage-progress", `${percent ?? 0}%`);
+      $("monitor-stage-percent").textContent = percent === null ? "—" : `${percent}%`;
     }
 
     function updateOutcomes(total) {
@@ -1548,8 +3564,23 @@
       const skipped = values.filter((value) => value === "Skipped").length;
       const failed = values.filter((value) => value === "Failed").length;
       const resolved = completed + skipped + failed;
-      $("outcome-counts").textContent = `Databases: ${resolved}/${total} resolved · ${completed} completed · ${skipped} skipped · ${failed} failed · ${Math.max(0, total - resolved)} pending`;
-      $("progress-bar").style.width = `${total ? Math.min(100, resolved * 100 / total) : 0}%`;
+      const active = activeDatabaseKey && !outcomes.has(activeDatabaseKey) ? 1 : 0;
+      const pending = Math.max(0, total - resolved - active);
+      $("monitor-total-jobs").textContent = String(total);
+      $("monitor-completed-jobs").textContent = String(completed);
+      $("monitor-skipped-jobs").textContent = String(skipped);
+      $("monitor-active-jobs").textContent = String(active);
+      $("monitor-pending-jobs").textContent = String(pending);
+      $("monitor-failed-jobs").textContent = String(failed);
+      $("outcome-counts").textContent = `Database jobs: ${resolved}/${total} resolved · ${completed} completed · ${skipped} skipped · ${failed} failed · ${active} in progress · ${pending} pending`;
+      const overallPercent = total ? Math.min(100, resolved * 100 / total) : 0;
+      $("progress-bar").style.width = `${overallPercent}%`;
+      $("monitor-overall-percent").textContent = `${Math.round(overallPercent)}%`;
+      $("progress-bar").setAttribute("role", "progressbar");
+      $("progress-bar").setAttribute("aria-valuemin", "0");
+      $("progress-bar").setAttribute("aria-valuemax", "100");
+      $("progress-bar").setAttribute("aria-valuenow", String(Math.round(overallPercent)));
+      $("progress-bar").setAttribute("aria-label", "Completed database jobs");
     }
 
     async function pollMigration() {
@@ -1557,6 +3588,10 @@
       pollInProgress = true;
       try {
         const status = await api("/api/status");
+        if (Number.isInteger(status.databaseCount)) {
+          selectedDatabaseTotal = status.databaseCount;
+          updateOutcomes(selectedDatabaseTotal);
+        }
         if (status.runId) {
           migrationActive = status.running;
           controlAction = status.controlAction || "Run";
@@ -1564,12 +3599,36 @@
             $("run-status").textContent = controlAction === "Pause" ? (controlPaused ? "Paused" : `Pausing · ${status.runId}`) :
               controlAction === "Stop" ? `Stopping · ${status.runId}` : `Running · ${status.runId}`;
             $("start").disabled = true;
-          } else if (status.exitCode !== null && $("run-status").textContent.startsWith("Running")) {
-            $("run-status").textContent = status.exitCode === 0 ? "Completed" : `Exited with code ${status.exitCode}`;
+          } else {
+            $("run-status").textContent = status.exitCode === null
+              ? "No migration running"
+              : status.exitCode === 0 ? "Completed" : `Exited with code ${status.exitCode}`;
             $("active-stage").textContent = "Migration process ended.";
             setRunControlsLocked(false);
           }
           updateControlButtons();
+        } else {
+          migrationActive = false;
+          $("run-status").textContent = "No migration running";
+          $("active-stage").textContent = "No active migration.";
+          setRunControlsLocked(patchActive);
+        }
+        if (status.running && status.runId && status.runId !== liveMonitorObservedRunId) {
+          liveMonitorObservedRunId = status.runId;
+          liveMonitorMigrationPairs = Array.isArray(status.pairs) ? status.pairs : [];
+          liveMonitorSelection.clear();
+          for (const pair of liveMonitorMigrationPairs) {
+            for (const instance of [pair.Source, pair.Target]) {
+              const normalized = String(instance || "").trim().toLowerCase();
+              if (normalized) liveMonitorSelection.add(normalized);
+            }
+          }
+          renderLiveMonitorTargets();
+          if (getSelectedLiveMonitorInstances().length) startLiveMonitor(true);
+        } else if (!status.running && status.runId &&
+            status.runId === liveMonitorObservedRunId && liveMonitorStartedByMigration) {
+          stopLiveMonitor();
+          $("live-monitor-status").textContent = "Migration ended; automatic monitoring stopped.";
         }
         const patchStatus = await api("/api/patch/status");
         patchActive = patchStatus.running;
@@ -1581,20 +3640,30 @@
             $("patch-status").textContent = `${actionLabel} KB${patchStatus.KB} · ${patchStatus.runId}`;
           } else {
             if (patchStatus.action === "Apply") invalidatePatchAssessment("Patch operation finished. Assess again before another apply.");
-            $("patch-status").textContent = patchStatus.exitCode === 0
+            $("patch-status").textContent = patchStatus.exitCode === null
+              ? "No patch operation running."
+              : patchStatus.exitCode === 0
               ? patchStatus.action === "Download" ? `KB${patchStatus.KB} download completed. Review the event log.` : `KB${patchStatus.KB} apply process completed. Review the event log.`
               : `KB${patchStatus.KB} ${patchStatus.action?.toLowerCase() || "patch"} failed (exit code ${patchStatus.exitCode}). Review the event log.`;
           }
+        } else {
+          patchActive = false;
+          $("patch-status").textContent = "No patch operation running.";
+          setRunControlsLocked(migrationActive);
         }
         setRunControlsLocked(migrationActive || patchActive);
         const result = await api(`/api/events?after=${eventCursor}`);
+        const suppressEvents = suppressExistingEventReplay;
         for (const item of result.events) {
-          appendEvent(item);
+          await appendEvent(item, { display: !suppressEvents, notify: !suppressEvents });
           eventCursor = Math.max(eventCursor, Number(item.Id));
         }
+        eventCursor = Math.max(eventCursor, Number(result.latestId) || 0);
+        if (suppressEvents) suppressExistingEventReplay = false;
       } catch (error) {
         if (error.message.includes("Authentication required")) showApplication(false);
       } finally {
+        refreshStatusColors();
         pollInProgress = false;
       }
     }

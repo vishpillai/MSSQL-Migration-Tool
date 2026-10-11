@@ -28,6 +28,178 @@ function Get-MigrationVolumeDetails {
     }
 }
 
+function Test-MigrationTdeReadiness {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Source,
+
+        [Parameter(Mandatory)]
+        [string] $Target,
+
+        [Parameter(Mandatory)]
+        [string] $Database,
+
+        [Parameter()]
+        [ValidateSet('Full', 'SchemaOnly')]
+        [string] $MigrationMode = 'Full'
+    )
+
+    $escapedDatabase = $Database.Replace("'", "''")
+    try {
+        $sourceEncryption = @(Invoke-DbaQuery -SqlInstance $Source -Database master -EnableException -ErrorAction Stop -Query @"
+SELECT
+    d.is_encrypted AS IsEncrypted,
+    dek.encryption_state AS EncryptionState,
+    CONVERT(varchar(130), dek.encryptor_thumbprint, 1) AS EncryptorThumbprint
+FROM sys.databases AS d
+LEFT JOIN sys.dm_database_encryption_keys AS dek
+    ON dek.database_id = d.database_id
+WHERE d.name = N'$escapedDatabase';
+"@)
+    }
+    catch {
+        return [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Database = $Database
+            Stage = 'TDEPreflight'
+            Status = 'Failed'
+            TdeEncrypted = $null
+            EncryptionState = $null
+            EncryptorThumbprint = ''
+            TargetEncryptorReady = $false
+            Message = "Could not verify source TDE status: $($_.Exception.Message)"
+        }
+    }
+    if ($sourceEncryption.Count -ne 1) {
+        return [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Database = $Database
+            Stage = 'TDEPreflight'
+            Status = 'Failed'
+            TdeEncrypted = $null
+            EncryptionState = $null
+            EncryptorThumbprint = ''
+            TargetEncryptorReady = $false
+            Message = "Could not determine TDE status for database '$Database' on source '$Source'."
+        }
+    }
+
+    $encrypted = [bool]$sourceEncryption[0].IsEncrypted
+    $thumbprint = [string]$sourceEncryption[0].EncryptorThumbprint
+    if (-not $encrypted) {
+        return [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Database = $Database
+            Stage = 'TDEPreflight'
+            Status = 'Passed'
+            TdeEncrypted = $false
+            EncryptionState = $null
+            EncryptorThumbprint = ''
+            TargetEncryptorReady = $true
+            Message = 'Source database is not encrypted with TDE.'
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($thumbprint) -or $thumbprint -notmatch '^0x[0-9A-Fa-f]+$') {
+        return [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Database = $Database
+            Stage = 'TDEPreflight'
+            Status = 'Failed'
+            TdeEncrypted = $true
+            EncryptionState = $sourceEncryption[0].EncryptionState
+            EncryptorThumbprint = ''
+            TargetEncryptorReady = $false
+            Message = "Database '$Database' is TDE-encrypted on '$Source', but its encryptor thumbprint could not be determined."
+        }
+    }
+    if ($MigrationMode -eq 'SchemaOnly') {
+        return [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Database = $Database
+            Stage = 'TDEPreflight'
+            Status = 'Passed'
+            TdeEncrypted = $true
+            EncryptionState = $sourceEncryption[0].EncryptionState
+            EncryptorThumbprint = $thumbprint
+            TargetEncryptorReady = $null
+            Message = "Source database uses TDE (encryption state $($sourceEncryption[0].EncryptionState)); schema-only migration does not restore its encrypted backup."
+        }
+    }
+
+    try {
+        $targetEncryption = @(Invoke-DbaQuery -SqlInstance $Target -Database master -EnableException -ErrorAction Stop -Query @"
+SELECT COUNT(*) AS MatchingPrivateKeyCount
+FROM (
+    SELECT thumbprint
+    FROM master.sys.certificates
+    WHERE thumbprint = CONVERT(varbinary(64), '$thumbprint', 1)
+      AND pvt_key_encryption_type_desc <> N'NO_PRIVATE_KEY'
+    UNION ALL
+    SELECT thumbprint
+    FROM master.sys.asymmetric_keys
+    WHERE thumbprint = CONVERT(varbinary(64), '$thumbprint', 1)
+      AND (pvt_key_encryption_type_desc <> N'NO_PRIVATE_KEY' OR cryptographic_provider_guid IS NOT NULL)
+) AS target_encryptors;
+"@)
+    }
+    catch {
+        return [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Database = $Database
+            Stage = 'TDEPreflight'
+            Status = 'Failed'
+            TdeEncrypted = $true
+            EncryptionState = $sourceEncryption[0].EncryptionState
+            EncryptorThumbprint = $thumbprint
+            TargetEncryptorReady = $false
+            Message = "Could not verify TDE encryptor '$thumbprint' on target '$Target': $($_.Exception.Message)"
+        }
+    }
+    if ($targetEncryption.Count -ne 1) {
+        return [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Database = $Database
+            Stage = 'TDEPreflight'
+            Status = 'Failed'
+            TdeEncrypted = $true
+            EncryptionState = $sourceEncryption[0].EncryptionState
+            EncryptorThumbprint = $thumbprint
+            TargetEncryptorReady = $false
+            Message = "Could not verify the TDE encryptor on target '$Target' for database '$Database'."
+        }
+    }
+    $targetReady = [int]$targetEncryption[0].MatchingPrivateKeyCount -gt 0
+    $status = if ($targetReady) { 'Passed' } else { 'Failed' }
+    $message = if ($targetReady) {
+        "Source database is TDE-encrypted (encryption state $($sourceEncryption[0].EncryptionState)); the target has a matching private-key certificate or asymmetric key ($thumbprint)."
+    }
+    else {
+        "Source database is TDE-encrypted (encryption state $($sourceEncryption[0].EncryptionState)), but target '$Target' does not have the matching private-key certificate or asymmetric key ($thumbprint). Install and verify the TDE encryptor on the target before migrating."
+    }
+
+    [pscustomobject]@{
+        Source = $Source
+        Target = $Target
+        Database = $Database
+        Stage = 'TDEPreflight'
+        Status = $status
+        TdeEncrypted = $true
+        EncryptionState = $sourceEncryption[0].EncryptionState
+        EncryptorThumbprint = $thumbprint
+        TargetEncryptorReady = $targetReady
+        Message = $message
+    }
+}
+
 function Test-MigrationRestoreCapacity {
     [CmdletBinding()]
     param(
@@ -132,6 +304,8 @@ function Get-MigrationDiscovery {
 
         foreach ($database in (Get-MigrationDatabase -SqlInstance $pair.Source -Configuration $Configuration)) {
             $files = @(Get-DbaDbFile -SqlInstance $pair.Source -Database $database.Name -EnableException -ErrorAction Stop)
+            $tdeReadiness = Test-MigrationTdeReadiness -Source $pair.Source -Target $pair.Target `
+                -Database $database.Name -MigrationMode $migrationMode
             $dataFiles = @($files | Where-Object TypeDescription -eq 'ROWS')
             $logFiles = @($files | Where-Object TypeDescription -eq 'LOG')
             $volumePaths = @($files | ForEach-Object { [System.IO.Path]::GetPathRoot($_.PhysicalName) } | Sort-Object -Unique)
@@ -160,6 +334,11 @@ function Get-MigrationDiscovery {
                 CompatibilityLevelNumber = $compatibilityNumber
                 State = $database.Status
                 RecoveryModel = [string]$database.RecoveryModel
+                TdeEncrypted = $tdeReadiness.TdeEncrypted
+                TdeEncryptorThumbprint = $tdeReadiness.EncryptorThumbprint
+                TdeTargetEncryptorReady = $tdeReadiness.TargetEncryptorReady
+                TdePreflight = $tdeReadiness.Status
+                TdeMessage = $tdeReadiness.Message
                 DataFileCount = $dataFiles.Count
                 LogFileCount = $logFiles.Count
                 DataFileLocations = (@($dataFiles | ForEach-Object { "$($_.LogicalName): $($_.PhysicalName) ($($_.Size))" }) -join '; ')
@@ -307,4 +486,4 @@ function Test-MigrationConfiguration {
     }
 }
 
-Export-ModuleMember -Function Get-MigrationDiscovery, Get-MigrationServerObjectCounts, Test-MigrationRestoreCapacity, Test-MigrationConfiguration
+Export-ModuleMember -Function Get-MigrationDiscovery, Get-MigrationServerObjectCounts, Test-MigrationRestoreCapacity, Test-MigrationTdeReadiness, Test-MigrationConfiguration

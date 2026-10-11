@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [Parameter()][string] $Configuration = 'Release'
+    [Parameter()][string] $Configuration = 'Release',
+    [Parameter()][switch] $StageOnly
 )
 
 Set-StrictMode -Version Latest
@@ -12,25 +13,86 @@ $stagingRoot = Join-Path $PSScriptRoot 'obj\staging'
 if (Test-Path -LiteralPath $stagingRoot) {
     Remove-Item -LiteralPath $stagingRoot -Recurse -Force
 }
-$null = New-Item -ItemType Directory -Path $stagingRoot -Force -ErrorAction Stop
+$appRoot = Join-Path $stagingRoot 'App'
+$null = New-Item -ItemType Directory -Path $appRoot -Force -ErrorAction Stop
 
-Get-ChildItem -LiteralPath $repoRoot -Force | Where-Object {
-    $_.Name -notin @('.git', '.gitignore', '.vscode', 'installer', 'portable')
-} | ForEach-Object {
-    $destination = Join-Path $stagingRoot $_.Name
-    Copy-Item -Path $_.FullName -Destination $destination -Recurse -Force
+$runtimeFiles = @(
+    'Initialize-DbMigrationWebAuth.ps1',
+    'Invoke-DbMigration.ps1',
+    'Invoke-DbMigrationGui.ps1',
+    'Invoke-DbMigrationPatch.ps1',
+    'Invoke-DbMigrationWeb.ps1',
+    'Invoke-DbMigrationWebPlan.ps1',
+    'Register-DbMigrationWebHttps.ps1',
+    'Start-PortableDbMigrationWeb.ps1'
+)
+foreach ($relativePath in $runtimeFiles) {
+    $source = Join-Path $repoRoot $relativePath
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Required runtime file is missing: $relativePath"
+    }
+    Copy-Item -LiteralPath $source -Destination (Join-Path $appRoot $relativePath) -Force
+}
+foreach ($directoryName in @('config', 'src', 'web')) {
+    $source = Join-Path $repoRoot $directoryName
+    if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+        throw "Required runtime directory is missing: $directoryName"
+    }
+    Copy-Item -LiteralPath $source -Destination (Join-Path $appRoot $directoryName) -Recurse -Force
 }
 
-$null = New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'portable\auth') -Force -ErrorAction Stop
-$null = New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'portable\logs') -Force -ErrorAction Stop
+$prerequisitePath = Join-Path $repoRoot 'Install-DbMigrationPrerequisites.ps1'
+if (-not (Test-Path -LiteralPath $prerequisitePath -PathType Leaf)) {
+    throw 'Required prerequisite installer is missing.'
+}
+Copy-Item -LiteralPath $prerequisitePath -Destination (Join-Path $stagingRoot 'Install-DbMigrationPrerequisites.ps1') -Force
 
 $launcherPath = Join-Path $stagingRoot 'Start-DbMigrationWeb.cmd'
 @'
 @echo off
 setlocal
-set "APPROOT=%~dp0"
-pwsh -NoProfile -ExecutionPolicy Bypass -File "%APPROOT%Start-PortableDbMigrationWeb.ps1"
+where pwsh.exe >nul 2>nul
+if errorlevel 1 (
+    echo ERROR: PowerShell 7 is required. Install PowerShell 7.2 or later and try again.
+    exit /b 9009
+)
+pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0Start-DbMigrationWeb.ps1" %*
+exit /b %ERRORLEVEL%
 '@ | Set-Content -LiteralPath $launcherPath -Encoding ASCII
+
+$runtimeLauncherPath = Join-Path $stagingRoot 'Start-DbMigrationWeb.ps1'
+@'
+[CmdletBinding()]
+param(
+    [Parameter()][string] $HostName = 'localhost',
+    [Parameter()][ValidateRange(1, 65535)][int] $Port = 9080,
+    [Parameter()][string] $Username = 'migration-admin',
+    [Parameter()][string] $Password
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+if ($PSVersionTable.PSVersion -lt [Version]'7.2') {
+    throw 'PowerShell 7.2 or later is required.'
+}
+
+if (-not (Get-Module -ListAvailable -Name dbatools)) {
+    & (Join-Path $PSScriptRoot 'Install-DbMigrationPrerequisites.ps1') -Scope CurrentUser | Out-Null
+}
+
+$appRoot = Join-Path $PSScriptRoot 'App'
+& (Join-Path $appRoot 'Start-PortableDbMigrationWeb.ps1') `
+    -HostName $HostName -Port $Port -Username $Username -Password $Password -AppRoot $appRoot
+'@ | Set-Content -LiteralPath $runtimeLauncherPath -Encoding UTF8
+
+$null = New-Item -ItemType Directory -Path (Join-Path $appRoot 'portable\auth') -Force -ErrorAction Stop
+$null = New-Item -ItemType Directory -Path (Join-Path $appRoot 'portable\logs') -Force -ErrorAction Stop
+
+if ($StageOnly) {
+    Write-Host "Portable application staged at: $stagingRoot"
+    return
+}
 
 $manifest = [System.Collections.Generic.List[string]]::new()
 $manifest.Add('<?xml version="1.0" encoding="utf-8"?>')
@@ -69,6 +131,24 @@ function Get-SafeId {
     return $safe
 }
 
+function Get-StableGuid {
+    param([Parameter(Mandatory)][string] $Value)
+
+    $sha1 = [System.Security.Cryptography.SHA1]::Create()
+    try {
+        $hash = $sha1.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("DbMigrationTool:$Value"))
+    }
+    finally {
+        $sha1.Dispose()
+    }
+
+    $hex = [System.BitConverter]::ToString($hash, 0, 16).Replace('-', '').ToLowerInvariant()
+    $variant = [Convert]::ToInt32($hex.Substring(16, 1), 16)
+    $hex = $hex.Substring(0, 12) + '5' + $hex.Substring(13, 3) +
+        [Convert]::ToString(($variant -band 0x3) -bor 0x8, 16) + $hex.Substring(17)
+    return ([guid]::ParseExact($hex, 'N')).ToString('B')
+}
+
 function Add-DirectoryCleanupComponent {
     param(
         [Parameter(Mandatory)][string] $DirectoryId,
@@ -78,7 +158,7 @@ function Add-DirectoryCleanupComponent {
     $safePath = Get-SafeId -Value $LogicalPath
     $componentId = 'cmp_cleanup_' + $safePath
     $removeFolderId = 'remove_' + $safePath
-    $guid = [guid]::NewGuid().ToString('B')
+    $guid = Get-StableGuid -Value "cleanup:$LogicalPath"
     $manifest.Add('      <Component Id="' + $componentId + '" Guid="' + $guid + '" Directory="' + $DirectoryId + '">')
     $manifest.Add('        <RemoveFolder Id="' + $removeFolderId + '" On="uninstall" />')
     $manifest.Add('        <RegistryValue Root="HKCU" Key="Software\DbMigrationTool\AppFiles" Name="' + $componentId + '" Type="integer" Value="1" KeyPath="yes" />')
@@ -107,7 +187,7 @@ function Add-DirectoryEntries {
         $componentId = 'cmp_' + (Get-SafeId -Value ($LogicalPath + '_' + $entry.Name))
         $fileId = 'file_' + (Get-SafeId -Value ($LogicalPath + '_' + $entry.Name))
         $source = [System.IO.Path]::GetRelativePath($PSScriptRoot, $entry.FullName) -replace '\\', '/'
-        $guid = [guid]::NewGuid().ToString('B')
+        $guid = Get-StableGuid -Value "file:$LogicalPath\$($entry.Name)"
         $manifest.Add('      <Component Id="' + $componentId + '" Guid="' + $guid + '" Directory="' + $ParentDirectoryId + '">')
         $manifest.Add('        <File Id="' + $fileId + '" Source="' + $source + '" />')
         $manifest.Add('        <RegistryValue Root="HKCU" Key="Software\DbMigrationTool\AppFiles" Name="' + $componentId + '" Type="string" Value="' + $source + '" KeyPath="yes" />')
@@ -131,7 +211,7 @@ Get-ChildItem -LiteralPath $stagingRoot -Force | Sort-Object Name | ForEach-Obje
     $componentId = 'cmp_' + (Get-SafeId -Value ('root_' + $_.Name))
     $fileId = 'file_' + (Get-SafeId -Value ('root_' + $_.Name))
     $source = [System.IO.Path]::GetRelativePath($PSScriptRoot, $_.FullName) -replace '\\', '/'
-    $guid = [guid]::NewGuid().ToString('B')
+    $guid = Get-StableGuid -Value "file:root\$($_.Name)"
     $manifest.Add('      <Component Id="' + $componentId + '" Guid="' + $guid + '" Directory="INSTALLFOLDER">')
     $manifest.Add('        <File Id="' + $fileId + '" Source="' + $source + '" />')
     $manifest.Add('        <RegistryValue Root="HKCU" Key="Software\DbMigrationTool\AppFiles" Name="' + $componentId + '" Type="string" Value="' + $source + '" KeyPath="yes" />')

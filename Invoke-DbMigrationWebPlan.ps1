@@ -39,14 +39,6 @@ if (-not $plan.Options.Contains('SkipLinkedServers')) {
 }
 
 $configuration = $plan.Configuration
-$configuration.SourceTargets = @($plan.Pairs | ForEach-Object {
-    @{
-        Source = [string]$_.Source
-        Target = [string]$_.Target
-        BackupPath = [string]$_.BackupPath
-        MigrationMode = [string]$_.MigrationMode
-    }
-})
 $configuration.AllowTargetReplace = $false
 $null = New-Item -ItemType Directory -Path $fullProgressPath -Force -ErrorAction Stop
 Write-MigrationProgressEvent -ProgressPath $fullProgressPath -Source '' -Target '' `
@@ -56,6 +48,34 @@ $migrationScript = Join-Path $PSScriptRoot 'Invoke-DbMigration.ps1'
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) "DbMigrationWebPlan-$([guid]::NewGuid().ToString('N'))"
 $temporaryReports = Join-Path $temporaryRoot 'reports'
 $null = New-Item -ItemType Directory -Path $temporaryReports -Force -ErrorAction Stop
+for ($pairIndex = 0; $pairIndex -lt $plan.Pairs.Count; $pairIndex++) {
+    $pairPlan = $plan.Pairs[$pairIndex]
+    if ($plan.Options.ConfigureLinkedServers -and -not $plan.Options.SkipLinkedServers) {
+        $linkedCsvPath = Join-Path $temporaryRoot "pair-$pairIndex-linked-servers.csv"
+        $csvRows = @($pairPlan.LinkedServers)
+        if ($csvRows.Count -gt 0) {
+            $csvRows | Select-Object LinkedServer, Provider, Product, DataSource, Catalog, SecurityMode, RemoteUser, PasswordEnvironmentVariable |
+                Export-Csv -LiteralPath $linkedCsvPath -NoTypeInformation -Encoding utf8 -ErrorAction Stop
+        }
+        else {
+            'LinkedServer,Provider,Product,DataSource,Catalog,SecurityMode,RemoteUser,PasswordEnvironmentVariable' |
+                Set-Content -LiteralPath $linkedCsvPath -Encoding utf8 -ErrorAction Stop
+        }
+        $pairPlan.LinkedServersCsv = $linkedCsvPath
+    }
+}
+$configuration.SourceTargets = @($plan.Pairs | ForEach-Object {
+    $configuredPair = @{
+        Source = [string]$_.Source
+        Target = [string]$_.Target
+        BackupPath = [string]$_.BackupPath
+        MigrationMode = [string]$_.MigrationMode
+    }
+    if ($_.Contains('LinkedServersCsv')) {
+        $configuredPair.LinkedServersCsv = [string]$_.LinkedServersCsv
+    }
+    $configuredPair
+})
 $migrationRows = [System.Collections.Generic.List[object]]::new()
 $runFailed = $false
 $runStopped = $false
@@ -140,6 +160,9 @@ try {
             Target = [string]$pairPlan.Target
             BackupPath = [string]$pairPlan.BackupPath
             MigrationMode = [string]$pairPlan.MigrationMode
+        }
+        if ($pairPlan.Contains('LinkedServersCsv')) {
+            $pair.LinkedServersCsv = [string]$pairPlan.LinkedServersCsv
         }
         Write-MigrationProgressEvent -ProgressPath $fullProgressPath -Source $pair.Source -Target $pair.Target `
             -Stage 'InstanceSequence' -Status 'Started' `

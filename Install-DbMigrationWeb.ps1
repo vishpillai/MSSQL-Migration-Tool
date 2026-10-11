@@ -109,8 +109,6 @@ $appInfoPath = Join-Path $resolvedInstallPath 'appinfo.json'
     Version = '1.0.0'
     InstalledAtUtc = [DateTime]::UtcNow.ToString('o')
     InstallPath = $resolvedInstallPath
-    DefaultUsername = 'migration-admin'
-    DefaultPassword = 'MigrationAdmin123!'
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $appInfoPath -Encoding UTF8
 
 function New-DesktopShortcut {
@@ -144,4 +142,4 @@ if (-not $NoStartMenuShortcut) {
     New-DesktopShortcut -Path $startMenuShortcutPath -Target $launcherPath -WorkingDirectory $resolvedInstallPath
 }
 
-Write-Host "Installed Db Migration Tool.`nLocation: $resolvedInstallPath`nLaunch with: $launcherPath`nDefault login: migration-admin / MigrationAdmin123!"
+Write-Host "Installed Db Migration Tool.`nLocation: $resolvedInstallPath`nLaunch with: $launcherPath`nA unique initial login is generated on first launch."

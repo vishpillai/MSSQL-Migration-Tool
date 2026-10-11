@@ -1,5 +1,6 @@
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.Core.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.Transfer.psm1') -Force
     Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.WebAuth.psm1') -Force
 }
 
@@ -265,6 +266,103 @@ Describe 'Custom SQL execution helpers' {
             $SqlInstance -eq 'target-sql' -and $Database -eq 'tempdb' -and $Query -eq 'SELECT 42 AS Result;'
         }
     }
+
+    It 'runs a batch against arbitrary independent instances and reports failures per target' {
+        Import-Module dbatools -ErrorAction Stop
+        Mock Invoke-MigrationCustomSqlInternal -ModuleName DbMigration.Core {
+            if ($SqlInstance -eq 'unreachable-sql') {
+                throw 'connection failed'
+            }
+            [pscustomobject]@{ Instance = $SqlInstance; Result = 42 }
+        }
+
+        $results = @(
+            Invoke-MigrationCustomSqlBatch -SqlInstances @('standalone-sql', 'unreachable-sql', 'STANDALONE-SQL') `
+                -Database 'application' -Query 'SELECT 42 AS Result;'
+        )
+
+        $results | Should -HaveCount 2
+        $results[0].SqlInstance | Should -Be 'standalone-sql'
+        $results[0].Succeeded | Should -BeTrue
+        $results[0].Rows[0].Result | Should -Be 42
+        $results[1].SqlInstance | Should -Be 'unreachable-sql'
+        $results[1].Succeeded | Should -BeFalse
+        $results[1].Error | Should -Be 'connection failed'
+        Should -Invoke Invoke-MigrationCustomSqlInternal -ModuleName DbMigration.Core -Times 2 -Exactly -ParameterFilter {
+            $Database -eq 'application' -and $Query -eq 'SELECT 42 AS Result;'
+        }
+    }
+
+    It 'splits comma-separated instance names while preserving host and port syntax' {
+        Import-Module dbatools -ErrorAction Stop
+        $script:customSqlTargets = [System.Collections.Generic.List[string]]::new()
+        Mock Invoke-MigrationCustomSqlInternal -ModuleName DbMigration.Core {
+            $script:customSqlTargets.Add($SqlInstance)
+            [pscustomobject]@{ Instance = $SqlInstance; Result = 42 }
+        }
+
+        $results = @(Invoke-MigrationCustomSqlBatch -SqlInstances @('localhost,localhost\NODE2', 'server.example.com,1433') `
+            -Database 'master' -Query 'SELECT 1;')
+
+        $results | Should -HaveCount 3
+        @($results | ForEach-Object SqlInstance) | Should -Be @(
+            'localhost',
+            'localhost\NODE2',
+            'server.example.com,1433'
+        )
+        @($script:customSqlTargets) | Should -Be @(
+            'localhost',
+            'localhost\NODE2',
+            'server.example.com,1433'
+        )
+    }
+
+    It 'rejects empty batch targets and blank instance names' {
+        { Invoke-MigrationCustomSqlBatch -SqlInstances @() -Database 'master' -Query 'SELECT 1' } |
+            Should -Throw '*At least one SQL instance is required*'
+        { Invoke-MigrationCustomSqlBatch -SqlInstances @('server-a', ' ') -Database 'master' -Query 'SELECT 1' } |
+            Should -Throw '*SQL instance names cannot be empty*'
+    }
+}
+
+Describe 'Server disk usage' {
+    It 'reads remote volume capacity for a SQL instance and calculates usage percentages' {
+        Import-Module dbatools -ErrorAction Stop
+        Mock Connect-DbaInstance -ModuleName DbMigration.Core {
+            [pscustomobject]@{ ComputerName = 'sql-host' }
+        }
+        Mock Get-DbaDiskSpace -ModuleName DbMigration.Core {
+            @(
+                [pscustomobject]@{ Name = 'C:\'; SizeInGB = 100; FreeInGB = 25 }
+                [pscustomobject]@{ Name = 'D:\'; SizeInGB = 500; FreeInGB = 400 }
+            )
+        }
+
+        $disks = @(Get-MigrationDiskUsage -SqlInstance 'sql-host\instance')
+
+        $disks | Should -HaveCount 2
+        $disks[0].SqlInstance | Should -Be 'sql-host\instance'
+        $disks[0].ComputerName | Should -Be 'sql-host'
+        $disks[0].Volume | Should -Be 'C:\'
+        $disks[0].UsedGB | Should -Be 75
+        $disks[0].PercentUsed | Should -Be 75
+        $disks[1].PercentUsed | Should -Be 20
+        Should -Invoke Get-DbaDiskSpace -ModuleName DbMigration.Core -Exactly 1
+    }
+
+    It 'rejects empty SQL instances and invalid volume capacity' {
+        { Get-MigrationDiskUsage -SqlInstance ' ' } | Should -Throw '*SqlInstance is required*'
+
+        Import-Module dbatools -ErrorAction Stop
+        Mock Connect-DbaInstance -ModuleName DbMigration.Core {
+            [pscustomobject]@{ ComputerName = 'sql-host' }
+        }
+        Mock Get-DbaDiskSpace -ModuleName DbMigration.Core {
+            @([pscustomobject]@{ Name = 'C:\'; SizeInGB = 0; FreeInGB = 0 })
+        }
+
+        { Get-MigrationDiskUsage -SqlInstance 'sql-host' } | Should -Throw '*invalid capacity values*'
+    }
 }
 
 Describe 'Web patch target resolution' {
@@ -328,6 +426,20 @@ Describe 'Web pair backup path requirement' {
     It 'requires a backup path when migrating' {
         { ConvertTo-WebPairs -Pairs @(@{ Source = 'a'; Target = 'b'; BackupPath = '' }) -RequireBackupPath } |
             Should -Throw '*BackupPath*'
+    }
+
+    It 'preserves per-pair linked-server inventory and its loaded state' {
+        $pair = @(ConvertTo-WebPairs -Pairs @(@{
+            Source = 'a'
+            Target = 'b'
+            BackupPath = ''
+            LinkedServersLoaded = $true
+            LinkedServers = @(@{ LinkedServer = 'warehouse'; DataSource = 'warehouse-new' })
+        }))[0]
+
+        $pair.LinkedServersLoaded | Should -BeTrue
+        $pair.LinkedServers[0].LinkedServer | Should -Be 'warehouse'
+        $pair.LinkedServers[0].DataSource | Should -Be 'warehouse-new'
     }
 }
 
@@ -501,6 +613,7 @@ Describe 'SQL Server patch helper' {
                     [pscustomobject]@{ NameLevel = '2022'; SPLevel = 'RTM'; CULevel = 'CU1 + GDR'; KBLevel = 'KB5100002'; Build = '16.0.2.1'; BuildLevel = '16.0.2'; ReleaseDate = (Get-Date).AddDays(1); SupportedUntil = (Get-Date).AddYears(5); MatchType = 'Exact' }
                 }
             }
+
         }
 
         $catalog = @(Get-MigrationSqlServerPatchCatalog -Refresh)
@@ -694,6 +807,106 @@ Describe 'Migration progress events' {
     }
 }
 
+Describe 'Safe database restore' {
+    BeforeAll {
+        Import-Module dbatools -ErrorAction Stop
+    }
+
+    It 'retries an orphaned destination-file conflict with unique file names and reports the retry prefix' {
+        $script:restoreAttempts = 0
+        Mock Restore-DbaDatabase -ModuleName DbMigration.Transfer {
+            $script:restoreAttempts++
+            if ($script:restoreAttempts -eq 1) {
+                throw 'File D:\Data\appdb.mdf already exists on sql-host, not owned by any database in sql-host\NODE2, will not overwrite.'
+            }
+        }
+
+        $result = Invoke-MigrationSafeRestore -SqlInstance 'sql-host\NODE2' -Path @('C:\backup\stripe.bak') `
+            -DatabaseName appdb -DestinationDataDirectory 'D:\Data' -DestinationLogDirectory 'D:\Log' `
+            -AllowFileCollisionRetry $true
+
+        $script:restoreAttempts | Should -Be 2
+        $result.FileCollisionRetry | Should -BeTrue
+        $result.DestinationFilePrefix | Should -Match '^mig_[a-f0-9]{12}_$'
+        Should -Invoke Restore-DbaDatabase -ModuleName DbMigration.Transfer -Exactly 1 -ParameterFilter {
+            $DestinationFilePrefix -like 'mig_*'
+        }
+    }
+
+    It 'does not retry destination-file conflicts when collision retry is not enabled' {
+        $script:restoreAttempts = 0
+        Mock Restore-DbaDatabase -ModuleName DbMigration.Transfer {
+            $script:restoreAttempts++
+            throw 'File D:\Data\appdb.mdf already exists on sql-host, not owned by any database in sql-host\NODE2, will not overwrite.'
+        }
+
+        {
+            Invoke-MigrationSafeRestore -SqlInstance 'sql-host\NODE2' -Path @('C:\backup\stripe.bak') `
+                -DatabaseName appdb -DestinationDataDirectory 'D:\Data' -DestinationLogDirectory 'D:\Log'
+        } | Should -Throw '*not owned by any database*'
+
+        $script:restoreAttempts | Should -Be 1
+        Should -Invoke Restore-DbaDatabase -ModuleName DbMigration.Transfer -Exactly 1
+    }
+
+    It 'does not retry restore errors unrelated to an orphaned destination file' {
+        Mock Restore-DbaDatabase -ModuleName DbMigration.Transfer {
+            throw 'Backup checksum validation failed.'
+        }
+
+        {
+            Invoke-MigrationSafeRestore -SqlInstance target -Path @('C:\backup\stripe.bak') `
+                -DatabaseName appdb -DestinationDataDirectory 'D:\Data' -DestinationLogDirectory 'D:\Log' `
+                -AllowFileCollisionRetry $true
+        } | Should -Throw '*checksum validation failed*'
+
+        Should -Invoke Restore-DbaDatabase -ModuleName DbMigration.Transfer -Exactly 1
+    }
+}
+
+Describe 'Full-text migration readiness' {
+    BeforeAll {
+        Import-Module dbatools -ErrorAction Stop
+    }
+
+    It 'blocks database migrations when full-text objects exist but the target feature is missing' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Transfer {
+            if ($Query -match 'sys.fulltext_indexes') {
+                [pscustomobject]@{ FullTextIndexCount = 3; FullTextPredicateModuleCount = 2 }
+            }
+            else {
+                [pscustomobject]@{ FullTextInstalled = 0 }
+            }
+        }
+
+        $result = Test-MigrationFullTextReadiness -Source source -Target target -Database appdb
+
+        $result.Status | Should -Be 'Failed'
+        $result.Stage | Should -Be 'FullTextPreflight'
+        $result.SourceFullTextIndexCount | Should -Be 3
+        $result.TargetFullTextInstalled | Should -BeFalse
+        $result.Message | Should -Match 'Full-Text Search is not installed'
+        Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.Transfer -Exactly 2
+    }
+
+    It 'allows migration when the source has no full-text objects and target search is absent' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Transfer {
+            if ($Query -match 'sys.fulltext_indexes') {
+                [pscustomobject]@{ FullTextIndexCount = 0; FullTextPredicateModuleCount = 0 }
+            }
+            else {
+                [pscustomobject]@{ FullTextInstalled = 0 }
+            }
+        }
+
+        $result = Test-MigrationFullTextReadiness -Source source -Target target -Database appdb
+
+        $result.Status | Should -Be 'Passed'
+        $result.TargetFullTextInstalled | Should -BeFalse
+        $result.Message | Should -Match 'no full-text indexes'
+    }
+}
+
 Describe 'Migration reports' {
     It 'writes valid CSV content when there are no rows to report' {
         $outputPath = Join-Path $TestDrive 'reports'
@@ -725,6 +938,51 @@ Describe 'Migration reports' {
 }
 
 Describe 'Application installation' {
+    It 'generates a one-time portable password without storing plaintext' {
+        $runningHost = $null
+        if ([System.Threading.Mutex]::TryOpenExisting('Global\DbMigrationToolWebHost', [ref]$runningHost)) {
+            $runningHost.Dispose()
+            Set-ItResult -Skipped -Because 'A running app host holds the machine-wide single-instance mutex.'
+            return
+        }
+
+        $appRoot = Join-Path $TestDrive 'PortableFirstRun'
+        $null = New-Item -ItemType Directory -Path (Join-Path $appRoot 'src') -Force
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\src\DbMigration.WebAuth.psm1') `
+            -Destination (Join-Path $appRoot 'src\DbMigration.WebAuth.psm1')
+        @'
+param([string] $HostName, [int] $Port, [switch] $PortableMode, [string] $AppRoot)
+'@ | Set-Content -LiteralPath (Join-Path $appRoot 'Invoke-DbMigrationWeb.ps1')
+
+        $previousNoElevate = $env:DBMIGRATION_NO_ELEVATE
+        $env:DBMIGRATION_NO_ELEVATE = '1'
+        try {
+            $output = @(
+                & (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -AppRoot $appRoot 6>&1 |
+                    ForEach-Object { $_.ToString() }
+            ) -join "`n"
+            $passwordMatch = [regex]::Match($output, 'Password: (?<password>[A-Za-z0-9_-]{43})')
+            $passwordMatch.Success | Should -BeTrue
+
+            $password = $passwordMatch.Groups['password'].Value
+            $authPath = Join-Path $appRoot 'portable\auth\auth.json'
+            $authText = Get-Content -LiteralPath $authPath -Raw
+            $authText | Should -Not -Match [regex]::Escape($password)
+            $authRecord = $authText | ConvertFrom-Json
+            Test-MigrationWebPassword -Record $authRecord -Username 'migration-admin' -Password $password |
+                Should -BeTrue
+
+            $secondLaunch = @(
+                & (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -AppRoot $appRoot 6>&1 |
+                    ForEach-Object { $_.ToString() }
+            ) -join "`n"
+            $secondLaunch | Should -Not -Match 'Initial portable login'
+        }
+        finally {
+            $env:DBMIGRATION_NO_ELEVATE = $previousNoElevate
+        }
+    }
+
     It 'installs the app bundle in a stable location and cleans up correctly' {
         $installRoot = Join-Path $TestDrive 'DbMigrationTool'
         $portableAuth = Join-Path $installRoot 'portable\auth'
@@ -744,6 +1002,7 @@ Describe 'Application installation' {
         Test-Path -LiteralPath (Join-Path $installRoot 'Invoke-DbMigrationPatch.ps1') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'src\DbMigration.Patching.psm1') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'appinfo.json') | Should -BeTrue
+        (Get-Content -LiteralPath (Join-Path $installRoot 'appinfo.json') -Raw) | Should -Not -Match 'DefaultPassword|MigrationAdmin123'
         Test-Path -LiteralPath (Join-Path $installRoot 'portable\auth') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'portable\logs') | Should -BeTrue
         (Get-Content -LiteralPath (Join-Path $installRoot 'portable\auth\auth.json') -Raw).TrimEnd() | Should -Be 'preserve-existing-auth'
@@ -911,6 +1170,13 @@ Describe 'Database discovery details' {
                 [pscustomobject]@{ TypeDescription = 'LOG'; LogicalName = 'appdb_log'; PhysicalName = 'L:\Logs\appdb.ldf'; Size = [pscustomobject]@{ Byte = 1GB } }
             )
         }
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Discovery {
+            [pscustomobject]@{
+                IsEncrypted = $false
+                EncryptionState = $null
+                EncryptorThumbprint = $null
+            }
+        }
     }
 
     It 'reports database size, file locations, compatibility, and source and target volume space' {
@@ -934,6 +1200,9 @@ Describe 'Database discovery details' {
         $result.SourceVolumeSpace | Should -Match '500 GB total, 100 GB free'
         $result.TargetDataFreeGB | Should -Be 100
         $result.TargetLogFreeGB | Should -Be 50
+        $result.TdeEncrypted | Should -BeFalse
+        $result.TdePreflight | Should -Be 'Passed'
+        $result.TdeTargetEncryptorReady | Should -BeTrue
     }
 
     It 'fails capacity preflight when the target volumes cannot fit the database files with buffer' {
@@ -949,6 +1218,87 @@ Describe 'Database discovery details' {
         $result.Status | Should -Be 'Failed'
         $result.DataRequiredWithBufferGB | Should -Be 240
         $result.LogRequiredWithBufferGB | Should -Be 72
+    }
+}
+
+Describe 'TDE migration preflight' {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.Discovery.psm1') -Force
+    }
+
+    It 'passes unencrypted databases without checking the target for a key' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Discovery {
+            [pscustomobject]@{ IsEncrypted = $false; EncryptionState = $null; EncryptorThumbprint = $null }
+        }
+
+        $result = Test-MigrationTdeReadiness -Source source -Target target -Database appdb
+
+        $result.Status | Should -Be 'Passed'
+        $result.TdeEncrypted | Should -BeFalse
+        Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.Discovery -Exactly 1
+    }
+
+    It 'fails closed when source TDE status cannot be verified' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Discovery {
+            throw 'VIEW SERVER STATE permission denied'
+        }
+
+        $result = Test-MigrationTdeReadiness -Source source -Target target -Database appdb
+
+        $result.Status | Should -Be 'Failed'
+        $result.TdeEncrypted | Should -BeNull
+        $result.Message | Should -Match 'VIEW SERVER STATE permission denied'
+        Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.Discovery -Exactly 1
+    }
+
+    It 'blocks an encrypted full migration when the target does not have the matching key' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Discovery {
+            if ($Query -match 'dm_database_encryption_keys') {
+                [pscustomobject]@{ IsEncrypted = $true; EncryptionState = 3; EncryptorThumbprint = '0xA1B2C3' }
+            }
+            else {
+                [pscustomobject]@{ MatchingPrivateKeyCount = 0 }
+            }
+        }
+
+        $result = Test-MigrationTdeReadiness -Source source -Target target -Database appdb
+
+        $result.Status | Should -Be 'Failed'
+        $result.TdeEncrypted | Should -BeTrue
+        $result.TargetEncryptorReady | Should -BeFalse
+        $result.Message | Should -Match 'Install and verify the TDE encryptor'
+        Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.Discovery -Exactly 2
+    }
+
+    It 'passes an encrypted full migration when the matching key is available on the target' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Discovery {
+            if ($Query -match 'dm_database_encryption_keys') {
+                [pscustomobject]@{ IsEncrypted = $true; EncryptionState = 3; EncryptorThumbprint = '0xA1B2C3' }
+            }
+            else {
+                [pscustomobject]@{ MatchingPrivateKeyCount = 1 }
+            }
+        }
+
+        $result = Test-MigrationTdeReadiness -Source source -Target target -Database appdb
+
+        $result.Status | Should -Be 'Passed'
+        $result.TargetEncryptorReady | Should -BeTrue
+        $result.Message | Should -Match 'matching private-key'
+    }
+
+    It 'reports encrypted schema-only databases without requiring the target key' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Discovery {
+            [pscustomobject]@{ IsEncrypted = $true; EncryptionState = 3; EncryptorThumbprint = '0xA1B2C3' }
+        }
+
+        $result = Test-MigrationTdeReadiness -Source source -Target target -Database appdb -MigrationMode SchemaOnly
+
+        $result.Status | Should -Be 'Passed'
+        $result.TdeEncrypted | Should -BeTrue
+        $result.TargetEncryptorReady | Should -BeNull
+        $result.Message | Should -Match 'schema-only migration does not restore'
+        Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.Discovery -Exactly 1
     }
 }
 
@@ -972,6 +1322,34 @@ Describe 'Database backup stripes' {
         } -ThrottleLimit 1
 
         $result | Should -Be 'Invoke-MigrationTrackedDatabaseOperation|background-job-ok'
+    }
+
+    It 'imports the transfer module into the restore background job before invoking its helper' {
+        $workerModulePath = Join-Path $TestDrive 'DbMigration.Transfer.WorkerTest.psm1'
+        @'
+function Invoke-MigrationSafeRestore {
+    param(
+        [string]$SqlInstance,
+        [string[]]$Path,
+        [string]$DatabaseName,
+        [string]$DestinationDataDirectory,
+        [string]$DestinationLogDirectory,
+        [bool]$AllowFileCollisionRetry
+    )
+    Set-Content -LiteralPath (Join-Path $PSScriptRoot 'worker-called.txt') -Value $DatabaseName
+    [pscustomobject]@{ FileCollisionRetry = $true; DestinationFilePrefix = 'mig_test_' }
+}
+Export-ModuleMember -Function Invoke-MigrationSafeRestore
+'@ | Set-Content -LiteralPath $workerModulePath
+
+        $operationOutput = @(Invoke-MigrationTrackedDatabaseOperation -Operation Restore -SqlInstance target `
+            -Source source -Target target -Database appdb -ProgressPath '' `
+            -BackupFiles @('C:\backup\appdb.bak') -DestinationDataDirectory 'D:\Data' `
+            -DestinationLogDirectory 'D:\Log' -TransferModulePath $workerModulePath)
+
+        (Get-Content -LiteralPath (Join-Path $TestDrive 'worker-called.txt') -Raw).Trim() |
+            Should -Be 'appdb'
+        $operationOutput.Count | Should -Be 0
     }
 
     It 'returns exactly the requested database stripe files in stripe order' {
@@ -1062,6 +1440,51 @@ Describe 'Linked server configuration' {
             $SqlInstance.FullName -contains 'target' -and $LinkedServer -eq 'warehouse' -and
             $ServerProduct -eq 'SQL Server' -and $SecurityContext -eq 'CurrentSecurityContext'
         }
+    }
+
+    It 'passes a SQL-authenticated linked-server password from its environment variable' {
+        $path = Join-Path $TestDrive 'linked-sql-auth.csv'
+        $environmentName = "DBMIGRATION_TEST_LINKEDSERVER_$([guid]::NewGuid().ToString('N'))"
+        [Environment]::SetEnvironmentVariable($environmentName, 'test-password')
+        try {
+            [pscustomobject]@{
+                LinkedServer = 'warehouse'
+                Provider = 'MSOLEDBSQL'
+                Product = 'SQL Server'
+                DataSource = 'warehouse.example.com'
+                Catalog = 'Analytics'
+                SecurityMode = 'SpecifiedSecurityContext'
+                RemoteUser = 'migration_reader'
+                PasswordEnvironmentVariable = $environmentName
+            } | Export-Csv -LiteralPath $path -NoTypeInformation
+            Mock New-DbaLinkedServer -ModuleName DbMigration.PostMigration
+            Mock Get-DbaLinkedServer -ModuleName DbMigration.PostMigration { @() }
+
+            Invoke-LinkedServerConfiguration -Pair @{ Target = 'target' } -CsvPath $path
+
+            Should -Invoke New-DbaLinkedServer -ModuleName DbMigration.PostMigration -Exactly 1 -ParameterFilter {
+                $SecurityContext -eq 'SpecifiedSecurityContext' -and
+                $SecurityContextRemoteUser -eq 'migration_reader' -and
+                $SecurityContextRemoteUserPassword -is [System.Security.SecureString]
+            }
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable($environmentName, $null)
+        }
+    }
+
+    It 'does not overwrite a same-name linked server already present on the target' {
+        $path = Join-Path $TestDrive 'linked-existing.csv'
+        'LinkedServer,Provider,Product,DataSource,Catalog,SecurityMode,RemoteUser,PasswordEnvironmentVariable' |
+            Set-Content -LiteralPath $path
+        'warehouse,MSOLEDBSQL,SQL Server,warehouse-new.example.com,Analytics,CurrentSecurityContext,,' |
+            Add-Content -LiteralPath $path
+        Mock New-DbaLinkedServer -ModuleName DbMigration.PostMigration
+        Mock Get-DbaLinkedServer -ModuleName DbMigration.PostMigration { @([pscustomobject]@{ Name = 'warehouse' }) }
+
+        Invoke-LinkedServerConfiguration -Pair @{ Target = 'target' } -CsvPath $path
+
+        Should -Invoke New-DbaLinkedServer -ModuleName DbMigration.PostMigration -Exactly 0
     }
 }
 

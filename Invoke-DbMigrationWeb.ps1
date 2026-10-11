@@ -40,6 +40,7 @@ foreach ($path in $requiredPaths) {
 Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.Core.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.Discovery.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.Patching.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.Reporting.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.WebAuth.psm1') -Force
 Import-Module dbatools -ErrorAction Stop
 $script:WebConfiguration = Import-MigrationConfiguration -Path $fullConfigPath
@@ -142,6 +143,12 @@ $script:PatchProcess = $null
 $script:PatchRunId = $null
 $script:PatchAction = $null
 $script:PatchKB = $null
+$script:PatchTargets = @()
+$script:PatchActor = ''
+$script:PatchCompletionLoggedRunId = $null
+$script:MigrationActor = ''
+$script:MigrationCompletionLoggedRunId = $null
+$script:CurrentProcessOperation = ''
 $script:PatchCatalog = @()
 $script:PatchCatalogUpdatedAt = $null
 $script:RuntimeConfigPath = $null
@@ -152,8 +159,16 @@ $script:ProcessOutputQueue = [System.Collections.Concurrent.ConcurrentQueue[DbMi
 $script:ProcessOutputHandler = $null
 $script:NextEventId = 1
 $script:RunId = $null
+$script:MigrationPairs = @()
+$script:DatabaseJobCount = 0
 $script:HostLogDirectory = if ($script:PortableMode) { $storage.LogDirectory } else { Join-Path $env:LOCALAPPDATA 'DbMigrationWeb\Logs' }
 $script:HostLogPath = Join-Path $script:HostLogDirectory "WebHost-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff').log"
+$script:AuditLogPath = Join-Path $script:HostLogDirectory 'Audit.jsonl'
+$script:AuditKeyPath = Join-Path $script:HostLogDirectory 'Audit.key'
+$script:AuditHeadPath = Join-Path $script:HostLogDirectory 'Audit.jsonl.head'
+$script:CurrentAuditRequestId = ''
+$script:CurrentAuditClientAddress = ''
+$script:AuditedWindowsPrincipals = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $null = New-Item -ItemType Directory -Path $script:HostLogDirectory -Force -ErrorAction Stop
 
 function Write-WebHostLog {
@@ -173,6 +188,69 @@ function Write-WebHostLog {
     [Console]::WriteLine($line.TrimEnd())
 }
 
+function Write-WebAuditRecord {
+    param(
+        [Parameter(Mandatory)][string] $Action,
+        [Parameter()][string] $Actor = '',
+        [Parameter()][string] $RunId = '',
+        [Parameter()][string] $Outcome = 'Completed',
+        [Parameter()][System.Collections.IDictionary] $Details = @{}
+    )
+
+    $category = if ($Action -match 'sign in|sign out|login|authentication|denied|rejected') { 'Security' }
+        elseif ($Action -match 'custom SQL') { 'Execution' }
+        elseif ($Action -match 'migration|patch') { 'Change' }
+        else { 'Operations' }
+    $severity = if ($Outcome -match 'Partial|Warning') { 'Warning' }
+        elseif ($Outcome -match 'Failed|Error|Denied|Rejected') { 'Error' }
+        else { 'Information' }
+    $resourceType = if ($Action -match 'migration') { 'Migration' }
+        elseif ($Action -match 'patch') { 'SQLServerPatch' }
+        elseif ($Action -match 'custom SQL') { 'SQLInstance' }
+        elseif ($Details.Contains('SqlInstance') -or $Details.Contains('SqlInstances')) { 'SQLInstance' }
+        elseif ($Action -match 'sign in|sign out') { 'Application' }
+        else { 'ApplicationOperation' }
+    $resourceName = if ($Details.Contains('SqlInstances')) { @($Details.SqlInstances) -join ', ' }
+        elseif ($Details.Contains('SqlInstance')) { [string]$Details.SqlInstance }
+        elseif ($Details.Contains('Targets')) { @($Details.Targets) -join ', ' }
+        elseif ($Details.Contains('Source') -or $Details.Contains('Target')) { "$($Details.Source) -> $($Details.Target)" }
+        else { '' }
+    $null = Add-MigrationAuditRecord -Path $script:AuditLogPath -KeyPath $script:AuditKeyPath `
+        -HeadPath $script:AuditHeadPath -Record @{
+        Timestamp = [DateTime]::UtcNow.ToString('o')
+        Actor = if ($Actor) { $Actor } else { [System.Security.Principal.WindowsIdentity]::GetCurrent().Name }
+        ActorType = if ($script:AuthenticationMode -eq 'Windows') { 'WindowsUser' } else { 'ApplicationUser' }
+        Category = $category
+        Severity = $severity
+        Action = $Action
+        Outcome = $Outcome
+        ResourceType = $resourceType
+        ResourceName = $resourceName
+        RunId = $RunId
+        ClientAddress = $script:CurrentAuditClientAddress
+        RequestId = $script:CurrentAuditRequestId
+        Details = $Details
+    }
+}
+
+function Write-WebRunRecord {
+    param(
+        [Parameter(Mandatory)][ValidateSet('Migration', 'Patch')][string] $Operation,
+        [Parameter(Mandatory)][string] $RunId,
+        [Parameter(Mandatory)][string] $RecordType,
+        [Parameter()][System.Collections.IDictionary] $Record = @{}
+    )
+
+    Add-MigrationJsonLine -Path (Join-Path $script:HostLogDirectory "$Operation-$RunId.jsonl") -Record (
+        @{
+            Timestamp = [DateTime]::UtcNow.ToString('o')
+            Operation = $Operation
+            RunId = $RunId
+            RecordType = $RecordType
+        } + $Record
+    )
+}
+
 function Get-WebMigrationControlAction {
     if (-not $script:ControlPath -or -not (Test-Path -LiteralPath $script:ControlPath -PathType Leaf)) {
         return 'Run'
@@ -185,7 +263,10 @@ function Get-WebMigrationControlAction {
 }
 
 function Set-WebMigrationControlAction {
-    param([Parameter(Mandatory)][ValidateSet('Pause', 'Resume', 'Stop')][string] $Action)
+    param(
+        [Parameter(Mandatory)][ValidateSet('Pause', 'Resume', 'Stop')][string] $Action,
+        [Parameter(Mandatory)][string] $Actor
+    )
 
     if (-not ($script:MigrationProcess -and -not $script:MigrationProcess.HasExited)) {
         throw [System.InvalidOperationException]::new('There is no active migration run to control.')
@@ -200,6 +281,8 @@ function Set-WebMigrationControlAction {
     if ($Action -eq 'Pause' -and $currentAction -eq 'Pause') {
         return $currentAction
     }
+    Write-WebAuditRecord -Action "Migration $($Action.ToLowerInvariant()) requested" -Actor $Actor `
+        -RunId $script:RunId -Outcome 'Requested' -Details @{ Action = $Action }
     $temporaryPath = "$($script:ControlPath).tmp"
     $controlJson = ConvertTo-Json -InputObject @{ Action = $Action; UpdatedAt = [DateTime]::UtcNow.ToString('o') } -Compress
     [System.IO.File]::WriteAllText($temporaryPath, $controlJson, [System.Text.UTF8Encoding]::new($false))
@@ -240,6 +323,28 @@ function Send-WebJson {
     $json = ConvertTo-Json -InputObject $Value -Depth 12 -Compress
     Send-WebResponse -Response $Response -StatusCode $StatusCode -ContentType 'application/json; charset=utf-8' `
         -Body ([Text.Encoding]::UTF8.GetBytes($json))
+}
+
+function ConvertTo-WebCustomSqlRows {
+    param([Parameter()][object[]] $RawRows = @())
+
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($item in $RawRows) {
+        $flat = [ordered]@{}
+        if ($item -is [System.Data.DataRow]) {
+            foreach ($column in $item.Table.Columns) {
+                $value = $item[$column]
+                $flat[$column.ColumnName] = if ($value -is [System.DBNull]) { $null } else { $value }
+            }
+        }
+        else {
+            foreach ($property in $item.PSObject.Properties) {
+                $flat[$property.Name] = $property.Value
+            }
+        }
+        $rows.Add($flat)
+    }
+    return $rows.ToArray()
 }
 
 function Read-WebRequestJson {
@@ -325,6 +430,14 @@ function Read-WebProgressFiles {
             $migrationEvent.Id = $script:NextEventId
             $script:NextEventId++
             $script:EventBuffer.Add($migrationEvent)
+            Write-WebRunRecord -Operation Migration -RunId $script:RunId -RecordType Progress -Record @{
+                Stage = [string]$migrationEvent.Stage
+                Status = [string]$migrationEvent.Status
+                Source = [string]$migrationEvent.Source
+                Target = [string]$migrationEvent.Target
+                Database = [string]$migrationEvent.Database
+                Message = [string]$migrationEvent.Message
+            }
             Remove-Item -LiteralPath $eventFile.FullName -Force -ErrorAction Stop
         }
         catch {
@@ -338,6 +451,15 @@ function Read-WebProgressFiles {
 }
 
 function Read-WebProcessOutput {
+    if ($script:CurrentProcessOperation -eq 'Patch' -and
+        $script:PatchProcess -and $script:PatchProcess.HasExited) {
+        $script:PatchProcess.WaitForExit()
+    }
+    elseif ($script:CurrentProcessOperation -eq 'Migration' -and
+        $script:MigrationProcess -and $script:MigrationProcess.HasExited) {
+        $script:MigrationProcess.WaitForExit()
+    }
+
     $queuedOutput = $null
     while ($script:ProcessOutputQueue.TryDequeue([ref]$queuedOutput)) {
         $outputEvent = @{
@@ -352,6 +474,20 @@ function Read-WebProcessOutput {
         }
         $script:NextEventId++
         $script:EventBuffer.Add($outputEvent)
+        if ($script:CurrentProcessOperation -eq 'Patch' -and $script:PatchRunId) {
+            Write-WebRunRecord -Operation Patch -RunId $script:PatchRunId -RecordType ProcessOutput -Record @{
+                Status = $queuedOutput.Status
+                Message = $queuedOutput.Message
+                Action = $script:PatchAction
+                KB = $script:PatchKB
+            }
+        }
+        elseif ($script:CurrentProcessOperation -eq 'Migration' -and $script:RunId) {
+            Write-WebRunRecord -Operation Migration -RunId $script:RunId -RecordType ProcessOutput -Record @{
+                Status = $queuedOutput.Status
+                Message = $queuedOutput.Message
+            }
+        }
         $queuedOutput = $null
     }
     if ($script:ProcessOutputHandler -and $script:ProcessOutputHandler.ConsumeDroppedLines() -gt 0) {
@@ -551,6 +687,18 @@ function ConvertTo-WebPairs {
             BackupPath = if ($rawBackupPath) { [System.IO.Path]::GetFullPath($rawBackupPath) } else { '' }
             MigrationMode = if ($pair.Contains('MigrationMode')) { [string]$pair.MigrationMode } else { 'Full' }
         }
+        if ($pair.Contains('LinkedServers')) {
+            if ($pair.LinkedServers -isnot [array]) {
+                throw [ArgumentException]::new('LinkedServers must be an array for each source/target pair.')
+            }
+            $normalizedPair.LinkedServers = $pair.LinkedServers
+        }
+        if ($pair.Contains('LinkedServersLoaded')) {
+            if ($pair.LinkedServersLoaded -isnot [bool]) {
+                throw [ArgumentException]::new('LinkedServersLoaded must be a JSON boolean.')
+            }
+            $normalizedPair.LinkedServersLoaded = [bool]$pair.LinkedServersLoaded
+        }
         if ($normalizedPair.MigrationMode -notin @('Full', 'SchemaOnly')) {
             throw [ArgumentException]::new("MigrationMode for '$($normalizedPair.Source)' must be 'Full' or 'SchemaOnly'.")
         }
@@ -573,7 +721,10 @@ function ConvertTo-WebPairs {
 }
 
 function Start-WebMigrationPlan {
-    param([Parameter(Mandatory)][System.Collections.IDictionary] $Body)
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary] $Body,
+        [Parameter()][string] $Actor = ''
+    )
 
     if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
         ($script:PatchProcess -and -not $script:PatchProcess.HasExited)) {
@@ -593,8 +744,12 @@ function Start-WebMigrationPlan {
             throw [ArgumentException]::new("'$optionName' must be provided as a JSON boolean.")
         }
     }
+    $configureLinkedServers = [bool]$Body.Options.ConfigureLinkedServers -and -not [bool]$Body.Options.SkipLinkedServers
+    $linkedServerSecrets = [System.Collections.Generic.List[object]]::new()
+    $linkedServerRunToken = [guid]::NewGuid().ToString('N')
     $planPairs = [System.Collections.Generic.List[object]]::new()
-    foreach ($pair in $pairs) {
+    for ($pairIndex = 0; $pairIndex -lt $pairs.Count; $pairIndex++) {
+        $pair = $pairs[$pairIndex]
         $serverWork = Test-MigrationServerWorkEnabled -Options $Body.Options -MigrationMode $pair.MigrationMode
         $pairKey = Get-WebPairKey -Pair $pair
         if (-not $script:DiscoveryByPair.ContainsKey($pairKey)) {
@@ -618,6 +773,73 @@ function Start-WebMigrationPlan {
         if (@($selectedNames | Select-Object -Unique).Count -ne $selectedNames.Count) {
             throw [ArgumentException]::new("Duplicate database entries were selected for '$($pair.Source)'.")
         }
+        $linkedServerDefinitions = @()
+        if ($configureLinkedServers) {
+            if (-not $pair.Contains('LinkedServersLoaded') -or -not $pair.LinkedServersLoaded -or
+                -not $pair.Contains('LinkedServers')) {
+                throw [ArgumentException]::new("Load and review linked servers for '$($pair.Source)' before starting linked-server configuration.")
+            }
+            if ($pair.LinkedServers.Count -gt 100) {
+                throw [ArgumentException]::new("No more than 100 linked-server definitions can be configured for '$($pair.Source)' in one run.")
+            }
+            $linkedServerNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            for ($linkedIndex = 0; $linkedIndex -lt $pair.LinkedServers.Count; $linkedIndex++) {
+                $definition = $pair.LinkedServers[$linkedIndex]
+                if ($definition -isnot [System.Collections.IDictionary]) {
+                    throw [ArgumentException]::new('Each linked-server definition must be an object.')
+                }
+                $password = if ($definition.Contains('Password')) { [string]$definition.Password } else { '' }
+                $definition.Password = ''
+                try {
+                    foreach ($requiredField in @('LinkedServer', 'Provider', 'Product', 'DataSource', 'SecurityMode', 'RemoteUser')) {
+                        if (-not $definition.Contains($requiredField)) {
+                            throw [ArgumentException]::new("Linked-server definition is missing '$requiredField'.")
+                        }
+                    }
+                    foreach ($requiredField in @('LinkedServer', 'Provider', 'Product', 'DataSource', 'SecurityMode')) {
+                        if ([string]::IsNullOrWhiteSpace([string]$definition[$requiredField])) {
+                            throw [ArgumentException]::new("Linked-server field '$requiredField' must not be empty.")
+                        }
+                    }
+                    $linkedName = ([string]$definition.LinkedServer).Trim()
+                    if (-not $linkedServerNames.Add($linkedName)) {
+                        throw [ArgumentException]::new("Linked-server name '$linkedName' is duplicated for '$($pair.Source)'.")
+                    }
+                    $securityMode = [string]$definition.SecurityMode
+                    if ($securityMode -notin @('NoConnection', 'WithoutSecurityContext', 'CurrentSecurityContext', 'SpecifiedSecurityContext')) {
+                        throw [ArgumentException]::new("Linked server '$linkedName' has an unsupported security mode.")
+                    }
+                    $remoteUser = [string]$definition.RemoteUser
+                    if ($securityMode -eq 'SpecifiedSecurityContext') {
+                        if ([string]::IsNullOrWhiteSpace($remoteUser) -or [string]::IsNullOrEmpty($password)) {
+                            throw [ArgumentException]::new("Linked server '$linkedName' requires a remote login and password for SQL authentication.")
+                        }
+                        $environmentName = "DBMIGRATION_LINKEDSERVER_${linkedServerRunToken}_${pairIndex}_${linkedIndex}"
+                        $linkedServerSecrets.Add(@{ Name = $environmentName; Value = $password })
+                    }
+                    elseif (-not [string]::IsNullOrEmpty($password)) {
+                        throw [ArgumentException]::new("Remove the password for linked server '$linkedName' or select SpecifiedSecurityContext.")
+                    }
+                    elseif (-not [string]::IsNullOrWhiteSpace($remoteUser)) {
+                        throw [ArgumentException]::new("Remove the remote login for linked server '$linkedName' or select SpecifiedSecurityContext.")
+                    }
+                    $linkedServerDefinitions += @{
+                        LinkedServer = $linkedName
+                        Provider = ([string]$definition.Provider).Trim()
+                        Product = ([string]$definition.Product).Trim()
+                        DataSource = ([string]$definition.DataSource).Trim()
+                        Catalog = [string]$definition.Catalog
+                        SecurityMode = $securityMode
+                        RemoteUser = $remoteUser
+                        PasswordEnvironmentVariable = if ($securityMode -eq 'SpecifiedSecurityContext') { $environmentName } else { '' }
+                    }
+                }
+                finally {
+                    $definition.Password = ''
+                    $password = ''
+                }
+            }
+        }
         foreach ($database in $pair.Databases) {
             if ($database -isnot [System.Collections.IDictionary] -or
                 -not $database.Contains('Overwrite') -or $database.Overwrite -isnot [bool] -or
@@ -640,6 +862,7 @@ function Start-WebMigrationPlan {
             Databases = @($pair.Databases | ForEach-Object {
                 @{ Database = [string]$_.Database; Overwrite = [bool]$_.Overwrite }
             })
+            LinkedServers = @($linkedServerDefinitions)
         })
     }
     if ($planPairs.Count -eq 0) {
@@ -663,10 +886,18 @@ function Start-WebMigrationPlan {
     }
     $runDirectory = Join-Path $env:LOCALAPPDATA 'DbMigrationWeb\Runs'
     $null = New-Item -ItemType Directory -Path $runDirectory -Force -ErrorAction Stop
+    Read-WebProcessOutput
     $script:RunId = [guid]::NewGuid().ToString('N')
+    $script:MigrationPairs = @($planPairs | ForEach-Object {
+        @{ Source = $_.Source; Target = $_.Target }
+    })
+    $script:CurrentProcessOperation = 'Migration'
+    $script:MigrationActor = $Actor
+    $script:MigrationCompletionLoggedRunId = $null
     $script:RuntimeConfigPath = Join-Path $runDirectory "$($script:RunId)-plan.json"
     $script:ProgressPath = Join-Path $runDirectory "$($script:RunId)-progress"
     $script:ControlPath = Join-Path $runDirectory "$($script:RunId)-control.json"
+    $script:DatabaseJobCount = [int](@($planPairs | ForEach-Object { $_.Databases.Count } | Measure-Object -Sum).Sum)
     $null = New-Item -ItemType Directory -Path $script:ProgressPath -Force -ErrorAction Stop
     [System.IO.File]::WriteAllText($script:ControlPath, '{"Action":"Run"}', [System.Text.UTF8Encoding]::new($false))
     $plan | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $script:RuntimeConfigPath -Encoding utf8
@@ -690,19 +921,44 @@ function Start-WebMigrationPlan {
     )) {
         [void]$startInfo.ArgumentList.Add([string]$argument)
     }
+    foreach ($secret in $linkedServerSecrets) {
+        $startInfo.Environment[$secret.Name] = $secret.Value
+    }
+    Write-WebAuditRecord -Action 'Migration launch requested' -Actor $Actor -RunId $script:RunId -Outcome 'Requested' -Details @{
+        Pairs = @($planPairs | ForEach-Object { @{ Source = $_.Source; Target = $_.Target } })
+        DatabaseCount = $script:DatabaseJobCount
+    }
     $script:MigrationProcess = [System.Diagnostics.Process]::new()
     $script:MigrationProcess.StartInfo = $startInfo
     $script:ProcessOutputHandler = [DbMigration.Web.ProcessOutputHandler]::new($script:ProcessOutputQueue)
     $script:ProcessOutputHandler.Attach($script:MigrationProcess)
-    if (-not $script:MigrationProcess.Start()) {
-        throw 'Could not start the migration plan process.'
+    try {
+        if (-not $script:MigrationProcess.Start()) {
+            throw 'Could not start the migration plan process.'
+        }
+    }
+    finally {
+        foreach ($secret in $linkedServerSecrets) {
+            $startInfo.Environment.Remove($secret.Name)
+            $secret.Value = ''
+        }
     }
     $script:MigrationProcess.BeginOutputReadLine()
     $script:MigrationProcess.BeginErrorReadLine()
+    Write-WebRunRecord -Operation Migration -RunId $script:RunId -RecordType RunStarted -Record @{
+        Pairs = @($planPairs | ForEach-Object { @{ Source = $_.Source; Target = $_.Target } })
+        DatabaseCount = $script:DatabaseJobCount
+        StartedBy = $Actor
+    }
+    Write-WebAuditRecord -Action 'Migration started' -Actor $Actor -RunId $script:RunId -Details @{
+        Pairs = @($planPairs | ForEach-Object { @{ Source = $_.Source; Target = $_.Target } })
+        DatabaseCount = $script:DatabaseJobCount
+    }
     return @{
         RunId = $script:RunId
         Status = 'Running'
         Sequential = $true
+        DatabaseCount = $script:DatabaseJobCount
         Pairs = @($planPairs | ForEach-Object {
             @{ Source = $_.Source; Target = $_.Target; DatabaseCount = $_.Databases.Count }
         })
@@ -794,7 +1050,8 @@ function Test-WebHostElevated {
 function Start-WebSqlServerPatch {
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary] $Body,
-        [Parameter(Mandatory)][ValidateSet('Download', 'Apply')][string] $Action
+        [Parameter(Mandatory)][ValidateSet('Download', 'Apply')][string] $Action,
+        [Parameter()][string] $Actor = ''
     )
 
     if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
@@ -847,9 +1104,14 @@ function Start-WebSqlServerPatch {
 
     $runDirectory = Join-Path $env:LOCALAPPDATA 'DbMigrationWeb\Runs'
     $null = New-Item -ItemType Directory -Path $runDirectory -Force -ErrorAction Stop
+    Read-WebProcessOutput
     $script:PatchRunId = [guid]::NewGuid().ToString('N')
+    $script:CurrentProcessOperation = 'Patch'
     $script:PatchAction = $Action
     $script:PatchKB = $kb
+    $script:PatchTargets = @($targets | ForEach-Object { [string]$_.SqlInstance })
+    $script:PatchActor = $Actor
+    $script:PatchCompletionLoggedRunId = $null
     $planPath = Join-Path $runDirectory "$($script:PatchRunId)-patch.json"
     $plan = @{
         Action = $Action
@@ -874,6 +1136,11 @@ function Start-WebSqlServerPatch {
     )) {
         [void]$startInfo.ArgumentList.Add([string]$argument)
     }
+    Write-WebAuditRecord -Action "Patch $($Action.ToLowerInvariant()) launch requested" -Actor $Actor -RunId $script:PatchRunId -Outcome 'Requested' -Details @{
+        KB = $kb
+        Targets = @($targets | ForEach-Object { [string]$_.SqlInstance })
+        Restart = [bool]$restart
+    }
     $script:PatchProcess = [System.Diagnostics.Process]::new()
     $script:PatchProcess.StartInfo = $startInfo
     $script:ProcessOutputHandler = [DbMigration.Web.ProcessOutputHandler]::new($script:ProcessOutputQueue)
@@ -883,6 +1150,16 @@ function Start-WebSqlServerPatch {
     }
     $script:PatchProcess.BeginOutputReadLine()
     $script:PatchProcess.BeginErrorReadLine()
+    Write-WebRunRecord -Operation Patch -RunId $script:PatchRunId -RecordType RunStarted -Record @{
+        Action = $Action
+        KB = $kb
+        Targets = @($script:PatchTargets)
+    }
+    Write-WebAuditRecord -Action "Patch $($Action.ToLowerInvariant()) started" -Actor $Actor -RunId $script:PatchRunId -Details @{
+        KB = $kb
+        Targets = @($script:PatchTargets)
+        Restart = $restart
+    }
 
     return @{
         RunId = $script:PatchRunId
@@ -917,6 +1194,9 @@ try {
         $context = $script:Listener.GetContext()
         $request = $context.Request
         $response = $context.Response
+        $script:CurrentAuditRequestId = [guid]::NewGuid().ToString('N')
+        $script:CurrentAuditClientAddress = [string]$request.RemoteEndPoint.Address
+        $session = $null
         try {
             $hostHeader = $request.UserHostName
             if (-not [string]::Equals($hostHeader, "$($script:HostName):$($script:Port)", [StringComparison]::OrdinalIgnoreCase) -and
@@ -954,6 +1234,10 @@ try {
                     else {
                         'Windows Integrated Authentication is required.'
                     }
+                    if ($isAuthenticated) {
+                        Write-WebAuditRecord -Action 'Windows authentication denied' -Actor ([string]$identity.Name) `
+                            -Outcome 'Denied' -Details @{ Reason = 'RequiredGroupMembership' }
+                    }
                     Send-WebJson -Response $response -StatusCode $statusCode -Value @{ error = $message; authMode = 'Windows' }
                     continue
                 }
@@ -986,6 +1270,7 @@ try {
                 $attempts = @($script:LoginAttempts[$address] | Where-Object { $_ -gt [DateTime]::UtcNow.AddMinutes(-10) })
                 if ($attempts.Count -ge 5) {
                     $script:LoginAttempts[$address] = $attempts
+                    Write-WebAuditRecord -Action 'Login attempt rate limited' -Outcome 'Denied' -Details @{ WindowMinutes = 10 }
                     Send-WebJson -Response $response -StatusCode 429 -Value @{ error = 'Too many login attempts. Try again in 10 minutes.' }
                     continue
                 }
@@ -998,6 +1283,7 @@ try {
                 if (-not $valid) {
                     $attempts += [DateTime]::UtcNow
                     $script:LoginAttempts[$address] = $attempts
+                    Write-WebAuditRecord -Action 'Login attempt failed' -Actor ([string]$body.Username) -Outcome 'Failed' -Details @{ RemainingAttempts = [Math]::Max(0, 5 - $attempts.Count) }
                     Start-Sleep -Milliseconds 350
                     Send-WebJson -Response $response -StatusCode 401 -Value @{ error = 'Invalid username or password.' }
                     continue
@@ -1011,6 +1297,7 @@ try {
                 [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
                 $token = [Convert]::ToBase64String($tokenBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
                 $script:Sessions[$token] = @{ Username = [string]$script:AuthRecord.Username; ExpiresUtc = [DateTime]::UtcNow.AddHours(8) }
+                Write-WebAuditRecord -Action 'User signed in' -Actor ([string]$script:AuthRecord.Username) -Outcome 'Succeeded'
                 Set-WebSessionCookie -Response $response -Token $token
                 Send-WebJson -Response $response -StatusCode 200 -Value @{ authenticated = $true; username = [string]$script:AuthRecord.Username }
                 continue
@@ -1021,6 +1308,9 @@ try {
                 Send-WebJson -Response $response -StatusCode 401 -Value @{ error = 'Authentication required.' }
                 continue
             }
+            if ($script:AuthenticationMode -eq 'Windows' -and $script:AuditedWindowsPrincipals.Add([string]$session.Username)) {
+                Write-WebAuditRecord -Action 'Windows authentication observed' -Actor $session.Username -Outcome 'Succeeded'
+            }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/logout') {
                 if ($script:AuthenticationMode -eq 'Windows') {
                     Send-WebJson -Response $response -StatusCode 200 -Value @{
@@ -1030,6 +1320,7 @@ try {
                     }
                     continue
                 }
+                Write-WebAuditRecord -Action 'User signed out' -Actor $session.Username -Outcome 'Succeeded'
                 $cookie = $request.Cookies['DbMigrationSession']
                 if ($cookie) { $script:Sessions.Remove($cookie.Value) }
                 Set-WebSessionCookie -Response $response
@@ -1052,6 +1343,67 @@ try {
                 }
                 continue
             }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/linked-servers') {
+                $body = Read-WebRequestJson -Request $request
+                if (-not $body.Contains('Source') -or [string]::IsNullOrWhiteSpace([string]$body.Source)) {
+                    throw [ArgumentException]::new('Source is required.')
+                }
+                if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
+                    ($script:PatchProcess -and -not $script:PatchProcess.HasExited)) {
+                    throw [System.InvalidOperationException]::new('Linked-server inventory is unavailable while migration or patching is running.')
+                }
+                $source = ([string]$body.Source).Trim()
+                $inventory = @(Invoke-DbaQuery -SqlInstance $source -Database master -EnableException -ErrorAction Stop -Query @'
+SELECT
+    s.name AS LinkedServer,
+    s.provider AS Provider,
+    s.product AS Product,
+    s.data_source AS DataSource,
+    s.catalog AS Catalog,
+    COALESCE(ll.local_principal_id, -1) AS LocalPrincipalId,
+    COALESCE(ll.LoginMappingCount, 0) AS LinkedLoginMappingCount,
+    CASE WHEN ll.local_principal_id = 0 THEN N'*' ELSE COALESCE(SUSER_NAME(ll.local_principal_id), N'') END AS LocalLogin,
+    CASE
+        WHEN ll.local_principal_id IS NULL THEN 'WithoutSecurityContext'
+        WHEN ll.uses_self_credential = 1 THEN 'CurrentSecurityContext'
+        WHEN NULLIF(ll.remote_name, N'') IS NOT NULL THEN 'SpecifiedSecurityContext'
+        ELSE 'WithoutSecurityContext'
+    END AS SecurityMode,
+    COALESCE(ll.remote_name, N'') AS RemoteUser
+FROM sys.servers AS s
+OUTER APPLY (
+    SELECT TOP (1)
+        linked_login.local_principal_id,
+        linked_login.uses_self_credential,
+        linked_login.remote_name,
+        COUNT(*) OVER () AS LoginMappingCount
+    FROM sys.linked_logins AS linked_login
+    WHERE linked_login.server_id = s.server_id
+    ORDER BY CASE WHEN linked_login.local_principal_id = 0 THEN 0 ELSE 1 END
+) AS ll
+WHERE s.is_linked = 1
+ORDER BY s.name;
+'@)
+                $definitions = @($inventory | ForEach-Object {
+                    @{
+                        LinkedServer = [string]$_.LinkedServer
+                        Provider = [string]$_.Provider
+                        Product = [string]$_.Product
+                        DataSource = [string]$_.DataSource
+                        Catalog = [string]$_.Catalog
+                        LocalPrincipalId = [int]$_.LocalPrincipalId
+                        LinkedLoginMappingCount = [int]$_.LinkedLoginMappingCount
+                        LocalLogin = [string]$_.LocalLogin
+                        SecurityMode = [string]$_.SecurityMode
+                        RemoteUser = [string]$_.RemoteUser
+                    }
+                })
+                Send-WebJson -Response $response -StatusCode 200 -Value @{
+                    Source = $source
+                    LinkedServers = $definitions
+                }
+                continue
+            }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/validate-pair') {
                 $body = Read-WebRequestJson -Request $request
                 if (-not $body.Contains('Pair')) {
@@ -1065,6 +1417,15 @@ try {
                 $validationConfiguration = $script:WebConfiguration.Clone()
                 $validationConfiguration.SourceTargets = @($pair)
                 $validation = @(Test-MigrationConfiguration -Configuration $validationConfiguration)
+                $failedValidationCount = @($validation | Where-Object Status -eq 'Failed').Count
+                Write-WebAuditRecord -Action 'Migration pair validated' -Actor $session.Username `
+                    -Outcome $(if ($failedValidationCount -eq 0) { 'Succeeded' } else { 'Failed' }) -Details @{
+                        Source = $pair.Source
+                        Target = $pair.Target
+                        PassedCount = @($validation | Where-Object Status -eq 'Passed').Count
+                        FailedCount = $failedValidationCount
+                        SkippedCount = @($validation | Where-Object Status -eq 'Skipped').Count
+                    }
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
                     source = $pair.Source
                     target = $pair.Target
@@ -1164,6 +1525,10 @@ try {
                 $connection = Connect-DbaInstance -SqlInstance $sqlInstance -ErrorAction Stop
                 $databases = @(Get-MigrationDatabase -SqlInstance $sqlInstance -Configuration $script:WebConfiguration |
                     Select-Object Name, SizeMB, Compatibility, Status, RecoveryModel)
+                Write-WebAuditRecord -Action 'SQL instance discovered' -Actor $session.Username -Outcome 'Succeeded' -Details @{
+                    SqlInstance = [string]$connection.SqlInstance
+                    DatabaseCount = $databases.Count
+                }
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
                     sqlInstance = [string]$connection.SqlInstance
                     computerName = [string]$connection.ComputerName
@@ -1197,6 +1562,11 @@ try {
                         Test-MigrationDatabaseExists -SqlInstance $pair.Target -Database ([string]$result.Database)
                     ) -Force
                 }
+                Write-WebAuditRecord -Action 'Migration pair discovered' -Actor $session.Username -Outcome 'Succeeded' -Details @{
+                    Source = $pair.Source
+                    Target = $pair.Target
+                    DatabaseCount = $results.Count
+                }
                 $pairKey = Get-WebPairKey -Pair $pair
                 $script:DiscoveryByPair[$pairKey] = @{
                     Pair = $pair
@@ -1211,6 +1581,288 @@ try {
                 Send-WebJson -Response $response -StatusCode 200 -Value @{ databases = $results }
                 continue
             }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/disk-usage') {
+                if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
+                    ($script:PatchProcess -and -not $script:PatchProcess.HasExited)) {
+                    throw [System.InvalidOperationException]::new('Disk usage checks are unavailable while a migration or patch is running.')
+                }
+                $body = Read-WebRequestJson -Request $request
+                if (-not $body.Contains('SqlInstances') -or $null -eq $body.SqlInstances -or $body.SqlInstances -is [string]) {
+                    throw [ArgumentException]::new('SqlInstances must be an array of SQL instance names.')
+                }
+                $sqlInstances = [System.Collections.Generic.List[string]]::new()
+                foreach ($entry in $body.SqlInstances) {
+                    if ($entry -isnot [string] -or [string]::IsNullOrWhiteSpace($entry)) {
+                        throw [ArgumentException]::new('Every SqlInstances entry must be a non-empty string.')
+                    }
+                    foreach ($instance in ($entry -split ',(?=\s*(?!\d+\s*(?:,|$))\S)')) {
+                        $trimmedInstance = $instance.Trim()
+                        if (-not [string]::IsNullOrWhiteSpace($trimmedInstance)) {
+                            $sqlInstances.Add($trimmedInstance)
+                        }
+                    }
+                }
+                $seenInstances = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                $uniqueInstances = @($sqlInstances | Where-Object { $seenInstances.Add($_) })
+                if ($uniqueInstances.Count -eq 0) {
+                    throw [ArgumentException]::new('Enter at least one SQL instance.')
+                }
+                if ($uniqueInstances.Count -gt 50) {
+                    throw [ArgumentException]::new('Check no more than 50 SQL instances at a time.')
+                }
+                $results = @($uniqueInstances | ForEach-Object {
+                    $sqlInstance = $_
+                    try {
+                        $disks = @(Get-MigrationDiskUsage -SqlInstance $sqlInstance)
+                        @{
+                            instance = $sqlInstance
+                            computerName = if ($disks.Count -gt 0) { [string]$disks[0].ComputerName } else { $null }
+                            succeeded = $true
+                            error = $null
+                            disks = @($disks | ForEach-Object {
+                                @{
+                                    volume = $_.Volume
+                                    sizeGB = $_.SizeGB
+                                    freeGB = $_.FreeGB
+                                    usedGB = $_.UsedGB
+                                    percentUsed = $_.PercentUsed
+                                }
+                            })
+                        }
+                    }
+                    catch {
+                        Write-WebHostLog -Level Error -Message "Disk usage check failed for '$sqlInstance': $($_.Exception.Message)"
+                        @{
+                            instance = $sqlInstance
+                            computerName = $null
+                            succeeded = $false
+                            error = $_.Exception.Message
+                            disks = @()
+                        }
+                    }
+                })
+                Write-WebAuditRecord -Action 'Disk usage checked' -Actor $session.Username `
+                    -Outcome $(if (@($results | Where-Object { -not $_.succeeded }).Count -eq 0) { 'Succeeded' } else { 'PartiallyFailed' }) -Details @{
+                        SqlInstances = @($uniqueInstances)
+                        TargetCount = $results.Count
+                        FailureCount = @($results | Where-Object { -not $_.succeeded }).Count
+                    }
+                Send-WebJson -Response $response -StatusCode 200 -Value @{
+                    results = $results
+                    targetCount = $results.Count
+                    successCount = @($results | Where-Object succeeded).Count
+                    failureCount = @($results | Where-Object { -not $_.succeeded }).Count
+                    checkedAt = [DateTime]::UtcNow.ToString('o')
+                }
+                continue
+            }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/live-monitor') {
+                $body = Read-WebRequestJson -Request $request
+                if (-not $body.Contains('SqlInstances') -or $null -eq $body.SqlInstances -or $body.SqlInstances -is [string]) {
+                    throw [ArgumentException]::new('SqlInstances must be an array of SQL instance names.')
+                }
+                $sqlInstances = [System.Collections.Generic.List[string]]::new()
+                foreach ($entry in $body.SqlInstances) {
+                    if ($entry -isnot [string] -or [string]::IsNullOrWhiteSpace($entry)) {
+                        throw [ArgumentException]::new('Every SqlInstances entry must be a non-empty string.')
+                    }
+                    $instance = $entry.Trim()
+                    if ($instance.Length -gt 256 -or $instance -match '[\r\n]') {
+                        throw [ArgumentException]::new('Every SQL instance name must be a single line of no more than 256 characters.')
+                    }
+                    $sqlInstances.Add($instance)
+                }
+                $seenInstances = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                $uniqueInstances = @($sqlInstances | Where-Object { $seenInstances.Add($_) })
+                if ($uniqueInstances.Count -eq 0) {
+                    throw [ArgumentException]::new('Select at least one SQL instance to monitor.')
+                }
+                if ($uniqueInstances.Count -gt 10) {
+                    throw [ArgumentException]::new('Monitor no more than 10 SQL instances at a time.')
+                }
+
+                $performanceQuery = @'
+SELECT
+    CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(32)) AS ProductVersion,
+    (
+        SELECT TOP (1)
+            record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int')
+        FROM (
+            SELECT [timestamp], CONVERT(xml, [record]) AS record
+            FROM sys.dm_os_ring_buffers
+            WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'
+                AND [record] LIKE N'%<SystemHealth>%'
+        ) AS ringBuffer
+        ORDER BY [timestamp] DESC
+    ) AS SqlCpuPercent,
+    (
+        SELECT TOP (1)
+            100 - record.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int')
+        FROM (
+            SELECT [timestamp], CONVERT(xml, [record]) AS record
+            FROM sys.dm_os_ring_buffers
+            WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'
+                AND [record] LIKE N'%<SystemHealth>%'
+        ) AS ringBuffer
+        ORDER BY [timestamp] DESC
+    ) AS HostCpuPercent,
+    (SELECT physical_memory_in_use_kb / 1024 FROM sys.dm_os_process_memory) AS SqlMemoryMB,
+    (SELECT memory_utilization_percentage FROM sys.dm_os_process_memory) AS SqlMemoryUtilizationPercent,
+    (SELECT total_physical_memory_kb FROM sys.dm_os_sys_memory) AS TotalPhysicalMemoryKB,
+    (SELECT available_physical_memory_kb FROM sys.dm_os_sys_memory) AS AvailablePhysicalMemoryKB,
+    (
+        SELECT TOP (1) cntr_value
+        FROM sys.dm_os_performance_counters
+        WHERE counter_name = N'Page life expectancy'
+            AND object_name LIKE N'%Buffer Manager'
+    ) AS PageLifeExpectancySeconds,
+    (
+        SELECT TOP (1) cntr_value
+        FROM sys.dm_os_performance_counters
+        WHERE counter_name = N'Memory Grants Pending'
+            AND object_name LIKE N'%Memory Manager'
+    ) AS PendingMemoryGrants,
+    (SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE is_user_process = 1) AS UserSessions,
+    (SELECT COUNT(*) FROM sys.dm_exec_requests WHERE session_id <> @@SPID) AS ActiveRequests,
+    (SELECT COUNT(*) FROM sys.dm_exec_requests WHERE blocking_session_id > 0) AS BlockedRequests;
+'@
+                $requestsQuery = @'
+SELECT TOP (10)
+    DB_NAME(requests.database_id) AS DatabaseName,
+    requests.status AS RequestStatus,
+    requests.command AS Command,
+    requests.wait_type AS WaitType,
+    requests.blocking_session_id AS BlockingSessionId,
+    requests.cpu_time AS CpuTimeMs,
+    requests.total_elapsed_time AS ElapsedTimeMs,
+    requests.logical_reads AS LogicalReads
+FROM sys.dm_exec_requests AS requests
+WHERE requests.session_id <> @@SPID
+ORDER BY requests.blocking_session_id DESC, requests.cpu_time DESC, requests.total_elapsed_time DESC;
+'@
+                $diskQuery = @'
+SELECT
+    volumes.volume_mount_point AS Volume,
+    CONVERT(decimal(19, 2), MAX(volumes.total_bytes) / 1073741824.0) AS SizeGB,
+    CONVERT(decimal(19, 2), MAX(volumes.available_bytes) / 1073741824.0) AS FreeGB,
+    CONVERT(decimal(5, 1), (1.0 - MAX(volumes.available_bytes) * 1.0 / NULLIF(MAX(volumes.total_bytes), 0)) * 100) AS PercentUsed,
+    SUM(io.num_of_reads) AS NumReads,
+    SUM(io.io_stall_read_ms) AS ReadStallMs,
+    SUM(io.num_of_writes) AS NumWrites,
+    SUM(io.io_stall_write_ms) AS WriteStallMs
+FROM sys.master_files AS files
+CROSS APPLY sys.dm_os_volume_stats(files.database_id, files.file_id) AS volumes
+CROSS APPLY sys.dm_io_virtual_file_stats(files.database_id, files.file_id) AS io
+WHERE volumes.volume_mount_point IS NOT NULL
+GROUP BY volumes.volume_mount_point
+ORDER BY volumes.volume_mount_point;
+'@
+                $checkedAt = [DateTime]::UtcNow.ToString('o')
+                $results = foreach ($sqlInstance in $uniqueInstances) {
+                    $result = @{
+                        instance = $sqlInstance
+                        checkedAt = $checkedAt
+                        status = 'Error'
+                        productVersion = $null
+                        sqlCpuPercent = $null
+                        hostCpuPercent = $null
+                        sqlMemoryMB = $null
+                        sqlMemoryUtilizationPercent = $null
+                        systemMemoryUsedPercent = $null
+                        pageLifeExpectancySeconds = $null
+                        pendingMemoryGrants = $null
+                        userSessions = $null
+                        activeRequests = $null
+                        blockedRequests = $null
+                        requests = @()
+                        disks = @()
+                        error = $null
+                        requestError = $null
+                        diskError = $null
+                    }
+                    try {
+                        $summaryRows = @(ConvertTo-WebCustomSqlRows -RawRows @(
+                            Invoke-DbaQuery -SqlInstance $sqlInstance -Database master -EnableException -ErrorAction Stop -Query $performanceQuery
+                        ))
+                        if ($summaryRows.Count -eq 0) {
+                            throw [System.InvalidOperationException]::new('SQL Server returned no performance data.')
+                        }
+                        $summary = $summaryRows[0]
+                        $result.status = 'Online'
+                        $result.productVersion = $summary.ProductVersion
+                        $totalPhysicalMemoryKB = [double]$summary.TotalPhysicalMemoryKB
+                        $availablePhysicalMemoryKB = [double]$summary.AvailablePhysicalMemoryKB
+                        if ($totalPhysicalMemoryKB -gt 0 -and $availablePhysicalMemoryKB -ge 0) {
+                            $result.systemMemoryUsedPercent = [math]::Round(
+                                (1 - ($availablePhysicalMemoryKB / $totalPhysicalMemoryKB)) * 100, 1
+                            )
+                        }
+                        foreach ($metric in @(
+                            'SqlCpuPercent', 'HostCpuPercent', 'SqlMemoryMB', 'SqlMemoryUtilizationPercent',
+                            'PageLifeExpectancySeconds', 'PendingMemoryGrants',
+                            'UserSessions', 'ActiveRequests', 'BlockedRequests'
+                        )) {
+                            $value = $summary[$metric]
+                            $result[(([char]::ToLowerInvariant($metric[0])) + $metric.Substring(1))] =
+                                if ($null -eq $value -or $value -is [System.DBNull]) { $null } else { $value }
+                        }
+                        try {
+                            $requestRows = @(ConvertTo-WebCustomSqlRows -RawRows @(
+                                Invoke-DbaQuery -SqlInstance $sqlInstance -Database master -EnableException -ErrorAction Stop -Query $requestsQuery
+                            ))
+                            $result.requests = @($requestRows | ForEach-Object {
+                                @{
+                                    databaseName = $_.DatabaseName
+                                    requestStatus = $_.RequestStatus
+                                    command = $_.Command
+                                    waitType = $_.WaitType
+                                    blockingSessionId = if ($null -eq $_.BlockingSessionId -or $_.BlockingSessionId -is [System.DBNull]) { $null } else { $_.BlockingSessionId }
+                                    cpuTimeMs = $_.CpuTimeMs
+                                    elapsedTimeMs = $_.ElapsedTimeMs
+                                    logicalReads = $_.LogicalReads
+                                }
+                            })
+                        }
+                        catch {
+                            $result.requestError = $_.Exception.Message
+                        }
+
+                        try {
+                            $diskRows = @(ConvertTo-WebCustomSqlRows -RawRows @(
+                                Invoke-DbaQuery -SqlInstance $sqlInstance -Database master -EnableException -ErrorAction Stop -Query $diskQuery
+                            ))
+                            $result.disks = @($diskRows | ForEach-Object {
+                                @{
+                                    volume = $_.Volume
+                                    sizeGB = $_.SizeGB
+                                    freeGB = $_.FreeGB
+                                    percentUsed = $_.PercentUsed
+                                    numReads = $_.NumReads
+                                    readStallMs = $_.ReadStallMs
+                                    numWrites = $_.NumWrites
+                                    writeStallMs = $_.WriteStallMs
+                                }
+                            })
+                        }
+                        catch {
+                            $result.diskError = $_.Exception.Message
+                        }
+                    }
+                    catch {
+                        $result.error = $_.Exception.Message
+                    }
+                    $result
+                }
+                $resultArray = @($results)
+                Send-WebJson -Response $response -StatusCode 200 -Value @{
+                    results = $resultArray
+                    targetCount = $resultArray.Count
+                    successCount = @($resultArray | Where-Object status -eq 'Online').Count
+                    failureCount = @($resultArray | Where-Object status -eq 'Error').Count
+                    checkedAt = $checkedAt
+                }
+                continue
+            }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/custom-sql') {
                 if ($script:PatchProcess -and -not $script:PatchProcess.HasExited) {
                     throw [System.InvalidOperationException]::new('Custom SQL execution is unavailable while SQL Server patching is running.')
@@ -1218,6 +1870,72 @@ try {
                 $body = Read-WebRequestJson -Request $request
                 if (-not $body.Contains('Query')) {
                     throw [ArgumentException]::new('Query is required.')
+                }
+                if ($body.Contains('SqlInstances')) {
+                    if ($null -eq $body.SqlInstances -or $body.SqlInstances -is [string]) {
+                        throw [ArgumentException]::new('SqlInstances must be an array of SQL instance names.')
+                    }
+                    $sqlInstances = @($body.SqlInstances | ForEach-Object {
+                        if ($_ -isnot [string]) {
+                            throw [ArgumentException]::new('Every SqlInstances entry must be a string.')
+                        }
+                        $_
+                    })
+                    $database = if ($body.Contains('Database') -and -not [string]::IsNullOrWhiteSpace([string]$body.Database)) {
+                        [string]$body.Database
+                    }
+                    else {
+                        'master'
+                    }
+                    $startedAt = [DateTime]::UtcNow
+                    Write-WebAuditRecord -Action 'Custom SQL execution requested' -Actor $session.Username -Outcome 'Requested' -Details @{
+                        SqlInstances = @($sqlInstances)
+                        Database = $database
+                        TargetCount = $sqlInstances.Count
+                    }
+                    try {
+                        $batchResults = @(Invoke-MigrationCustomSqlBatch -SqlInstances $sqlInstances -Database $database -Query ([string]$body.Query))
+                    }
+                    catch {
+                        Write-WebAuditRecord -Action 'Custom SQL executed' -Actor $session.Username -Outcome 'Failed' -Details @{
+                            SqlInstances = @($sqlInstances)
+                            Database = $database
+                            TargetCount = $sqlInstances.Count
+                        }
+                        throw
+                    }
+                    $failureCount = @($batchResults | Where-Object { -not $_.Succeeded }).Count
+                    Write-WebAuditRecord -Action 'Custom SQL executed' -Actor $session.Username -Outcome $(if ($failureCount -eq 0) { 'Succeeded' } else { 'PartiallyFailed' }) -Details @{
+                        SqlInstances = @($sqlInstances)
+                        Database = $database
+                        TargetCount = $sqlInstances.Count
+                        FailureCount = $failureCount
+                    }
+                    $results = @($batchResults | ForEach-Object {
+                        if (-not $_.Succeeded) {
+                            Write-WebHostLog -Level Error -Message "Custom SQL execution failed on '$($_.SqlInstance)'."
+                        }
+                        $rows = @(ConvertTo-WebCustomSqlRows -RawRows $_.Rows)
+                        $columns = if ($rows.Count -gt 0) { @($rows[0].Keys) } else { @() }
+                        @{
+                            instance = $_.SqlInstance
+                            database = $database
+                            succeeded = [bool]$_.Succeeded
+                            error = $_.Error
+                            rowCount = $rows.Count
+                            columns = $columns
+                            rows = $rows
+                            elapsedMilliseconds = $_.ElapsedMilliseconds
+                        }
+                    })
+                    Send-WebJson -Response $response -StatusCode 200 -Value @{
+                        results = $results
+                        targetCount = $results.Count
+                        successCount = @($results | Where-Object succeeded).Count
+                        failureCount = @($results | Where-Object { -not $_.succeeded }).Count
+                        elapsedMilliseconds = [int](([DateTime]::UtcNow - $startedAt).TotalMilliseconds)
+                    }
+                    continue
                 }
                 $pairIndex = $null
                 if ($body.Contains('SqlInstance') -and -not [string]::IsNullOrWhiteSpace([string]$body.SqlInstance)) {
@@ -1244,7 +1962,27 @@ try {
                 }
                 $query = [string]$body.Query
                 $startedAt = [DateTime]::UtcNow
-                $rawRows = @(Invoke-MigrationCustomSql -SqlInstance $sqlInstance -Database $database -Query $query)
+                Write-WebAuditRecord -Action 'Custom SQL execution requested' -Actor $session.Username -Outcome 'Requested' -Details @{
+                    SqlInstance = $sqlInstance
+                    Database = $database
+                    TargetCount = 1
+                }
+                try {
+                    $rawRows = @(Invoke-MigrationCustomSql -SqlInstance $sqlInstance -Database $database -Query $query)
+                }
+                catch {
+                    Write-WebAuditRecord -Action 'Custom SQL executed' -Actor $session.Username -Outcome 'Failed' -Details @{
+                        SqlInstance = $sqlInstance
+                        Database = $database
+                        TargetCount = 1
+                    }
+                    throw
+                }
+                Write-WebAuditRecord -Action 'Custom SQL executed' -Actor $session.Username -Outcome 'Succeeded' -Details @{
+                    SqlInstance = $sqlInstance
+                    Database = $database
+                    TargetCount = 1
+                }
                 $rows = @($rawRows | ForEach-Object {
                     $flat = [ordered]@{}
                     if ($_ -is [System.Data.DataRow]) {
@@ -1279,10 +2017,12 @@ try {
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/patch/download') {
                 $body = Read-WebRequestJson -Request $request
                 try {
-                    $result = Start-WebSqlServerPatch -Body $body -Action Download
+                    $result = Start-WebSqlServerPatch -Body $body -Action Download -Actor $session.Username
                     Send-WebJson -Response $response -StatusCode 202 -Value $result
                 }
                 catch [System.InvalidOperationException] {
+                    Write-WebAuditRecord -Action 'Patch operation denied' -Actor $session.Username -Outcome 'Denied' `
+                        -Details @{ Operation = 'Download'; ErrorType = $_.Exception.GetType().Name }
                     Send-WebJson -Response $response -StatusCode 409 -Value @{ error = $_.Exception.Message }
                 }
                 continue
@@ -1290,33 +2030,55 @@ try {
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/patch') {
                 $body = Read-WebRequestJson -Request $request
                 try {
-                    $result = Start-WebSqlServerPatch -Body $body -Action Apply
+                    $result = Start-WebSqlServerPatch -Body $body -Action Apply -Actor $session.Username
                     Send-WebJson -Response $response -StatusCode 202 -Value $result
                 }
                 catch [System.InvalidOperationException] {
+                    Write-WebAuditRecord -Action 'Patch operation denied' -Actor $session.Username -Outcome 'Denied' `
+                        -Details @{ Operation = 'Apply'; ErrorType = $_.Exception.GetType().Name }
                     Send-WebJson -Response $response -StatusCode 409 -Value @{ error = $_.Exception.Message }
                 }
                 continue
             }
             if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/patch/status') {
+                Read-WebProcessOutput
                 $running = [bool]($script:PatchProcess -and -not $script:PatchProcess.HasExited)
                 $exitCode = if ($script:PatchProcess -and $script:PatchProcess.HasExited) { $script:PatchProcess.ExitCode } else { $null }
+                if ($null -ne $exitCode -and $script:PatchRunId -and $script:PatchCompletionLoggedRunId -ne $script:PatchRunId) {
+                    $status = if ($exitCode -eq 0) { 'Succeeded' } else { 'Failed' }
+                    Write-WebRunRecord -Operation Patch -RunId $script:PatchRunId -RecordType RunCompleted -Record @{
+                        Action = $script:PatchAction
+                        KB = $script:PatchKB
+                        Targets = @($script:PatchTargets)
+                        Status = $status
+                        ExitCode = $exitCode
+                    }
+                    Write-WebAuditRecord -Action "Patch $($script:PatchAction.ToLowerInvariant()) completed" -Actor $script:PatchActor -RunId $script:PatchRunId -Outcome $status -Details @{
+                        KB = $script:PatchKB
+                        Targets = @($script:PatchTargets)
+                        ExitCode = $exitCode
+                    }
+                    $script:PatchCompletionLoggedRunId = $script:PatchRunId
+                }
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
                     runId = $script:PatchRunId
                     running = $running
                     exitCode = $exitCode
                     action = $script:PatchAction
                     KB = $script:PatchKB
+                    targets = @($script:PatchTargets)
                 }
                 continue
             }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/migrate') {
                 $body = Read-WebRequestJson -Request $request
                 try {
-                    $result = Start-WebMigrationPlan -Body $body
+                    $result = Start-WebMigrationPlan -Body $body -Actor $session.Username
                     Send-WebJson -Response $response -StatusCode 202 -Value $result
                 }
                 catch [System.InvalidOperationException] {
+                    Write-WebAuditRecord -Action 'Migration operation denied' -Actor $session.Username -Outcome 'Denied' `
+                        -Details @{ ErrorType = $_.Exception.GetType().Name }
                     Send-WebJson -Response $response -StatusCode 409 -Value @{ error = $_.Exception.Message }
                 }
                 continue
@@ -1324,26 +2086,118 @@ try {
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/control') {
                 $body = Read-WebRequestJson -Request $request
                 if (-not $body.Contains('Action') -or $body.Action -notin @('Pause', 'Resume', 'Stop')) {
+                    Write-WebAuditRecord -Action 'Migration control request rejected' -Actor $session.Username `
+                        -Outcome 'Rejected' -Details @{ Reason = 'InvalidAction' }
                     Send-WebJson -Response $response -StatusCode 400 -Value @{ error = 'Action must be Pause, Resume, or Stop.' }
                     continue
                 }
                 try {
-                    $action = Set-WebMigrationControlAction -Action ([string]$body.Action)
+                    $action = Set-WebMigrationControlAction -Action ([string]$body.Action) -Actor $session.Username
                     Send-WebJson -Response $response -StatusCode 200 -Value @{ action = $action }
                 }
                 catch [System.InvalidOperationException] {
+                    Write-WebAuditRecord -Action 'Migration control request denied' -Actor $session.Username `
+                        -RunId $script:RunId -Outcome 'Denied' -Details @{
+                            Action = [string]$body.Action
+                            ErrorType = $_.Exception.GetType().Name
+                        }
                     Send-WebJson -Response $response -StatusCode 409 -Value @{ error = $_.Exception.Message }
                 }
                 continue
             }
             if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/status') {
+                Read-WebProgressFiles
+                Read-WebProcessOutput
                 $running = [bool]($script:MigrationProcess -and -not $script:MigrationProcess.HasExited)
                 $exitCode = if ($script:MigrationProcess -and $script:MigrationProcess.HasExited) { $script:MigrationProcess.ExitCode } else { $null }
+                if ($null -ne $exitCode -and $script:RunId -and $script:MigrationCompletionLoggedRunId -ne $script:RunId) {
+                    $status = if ($exitCode -eq 0) { 'Succeeded' } else { 'Failed' }
+                    Write-WebRunRecord -Operation Migration -RunId $script:RunId -RecordType RunCompleted -Record @{
+                        Status = $status
+                        ExitCode = $exitCode
+                    }
+                    Write-WebAuditRecord -Action 'Migration completed' -Actor $script:MigrationActor -RunId $script:RunId -Outcome $status -Details @{
+                        ExitCode = $exitCode
+                    }
+                    $script:MigrationCompletionLoggedRunId = $script:RunId
+                }
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
                     runId = $script:RunId
                     running = $running
                     exitCode = $exitCode
+                    databaseCount = $script:DatabaseJobCount
+                    pairs = @($script:MigrationPairs)
                     controlAction = Get-WebMigrationControlAction
+                }
+                continue
+            }
+            if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/reporting') {
+                $limit = 100
+                if ($request.QueryString['limit']) {
+                    $parsedLimit = 0
+                    if (-not [int]::TryParse($request.QueryString['limit'], [ref]$parsedLimit) -or $parsedLimit -lt 1 -or $parsedLimit -gt 500) {
+                        throw [ArgumentException]::new('Reporting limit must be an integer between 1 and 500.')
+                    }
+                    $limit = $parsedLimit
+                }
+                $reportDirectory = [string]$script:WebConfiguration.OutputPath
+                if (-not [System.IO.Path]::IsPathRooted($reportDirectory)) {
+                    $reportDirectory = Join-Path $PSScriptRoot $reportDirectory
+                }
+                $data = Get-MigrationReportingData -AuditPath $script:AuditLogPath -AuditKeyPath $script:AuditKeyPath `
+                    -AuditHeadPath $script:AuditHeadPath `
+                    -LogDirectory $script:HostLogDirectory -ReportDirectory $reportDirectory -Limit $limit -OmitAuditRecords
+                Send-WebJson -Response $response -StatusCode 200 -Value $data
+                continue
+            }
+            if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/audit') {
+                $limit = 500
+                if ($request.QueryString['limit']) {
+                    $parsedLimit = 0
+                    if (-not [int]::TryParse($request.QueryString['limit'], [ref]$parsedLimit) -or $parsedLimit -lt 1 -or $parsedLimit -gt 500) {
+                        throw [ArgumentException]::new('Audit limit must be an integer between 1 and 500.')
+                    }
+                    $limit = $parsedLimit
+                }
+                $search = [string]$request.QueryString['search']
+                $actor = [string]$request.QueryString['actor']
+                $category = [string]$request.QueryString['category']
+                $severity = [string]$request.QueryString['severity']
+                $outcome = [string]$request.QueryString['outcome']
+                if ($search.Length -gt 256 -or $actor.Length -gt 256 -or
+                    $category.Length -gt 64 -or $severity.Length -gt 64 -or $outcome.Length -gt 64) {
+                    throw [ArgumentException]::new('Audit text filters cannot exceed 256 characters; category, severity, and outcome filters cannot exceed 64 characters.')
+                }
+                $fromUtc = ''
+                $toUtc = ''
+                foreach ($dateFilter in @(
+                    @{ Name = 'from'; Value = [string]$request.QueryString['from']; Destination = 'From' },
+                    @{ Name = 'to'; Value = [string]$request.QueryString['to']; Destination = 'To' }
+                )) {
+                    if ($dateFilter.Value) {
+                        $parsedDate = [DateTime]::MinValue
+                        if (-not [DateTime]::TryParseExact($dateFilter.Value, 'yyyy-MM-dd',
+                            [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsedDate)) {
+                            throw [ArgumentException]::new("Audit '$($dateFilter.Name)' date must use YYYY-MM-DD format.")
+                        }
+                        if ($dateFilter.Destination -eq 'To' -and $parsedDate.Date -eq [DateTime]::MaxValue.Date) {
+                            throw [ArgumentException]::new("Audit '$($dateFilter.Name)' date must be before 9999-12-31.")
+                        }
+                        if ($dateFilter.Destination -eq 'From') { $fromUtc = $parsedDate.ToString('yyyy-MM-ddT00:00:00Z') }
+                        else { $toUtc = $parsedDate.AddDays(1).ToString('yyyy-MM-ddT00:00:00Z') }
+                    }
+                }
+                $audit = Get-MigrationAuditLog -Path $script:AuditLogPath -KeyPath $script:AuditKeyPath `
+                    -HeadPath $script:AuditHeadPath -Limit $limit `
+                    -Search $search -Actor $actor -Category $category `
+                    -Severity $severity -Outcome $outcome `
+                    -FromUtc $fromUtc -ToUtc $toUtc
+                Send-WebJson -Response $response -StatusCode 200 -Value @{
+                    Records = @($audit.Records | Sort-Object { [string]$_.Timestamp } -Descending)
+                    Integrity = $audit.Integrity
+                    MatchingEntries = $audit.MatchingEntries
+                    ReturnedEntries = @($audit.Records).Count
+                    Limit = $limit
                 }
                 continue
             }
@@ -1359,7 +2213,13 @@ try {
             Send-WebJson -Response $response -StatusCode 404 -Value @{ error = 'Not found.' }
         }
         catch {
-            Write-WebHostLog -Level Error -Message "Web request failed for $($request.HttpMethod) $($request.Url.AbsolutePath): $($_.Exception.ToString())"
+            $requestFailure = if ($request.Url.AbsolutePath -eq '/api/custom-sql') {
+                "Web request failed for $($request.HttpMethod) $($request.Url.AbsolutePath): $($_.Exception.GetType().Name)"
+            }
+            else {
+                "Web request failed for $($request.HttpMethod) $($request.Url.AbsolutePath): $($_.Exception.ToString())"
+            }
+            Write-WebHostLog -Level Error -Message $requestFailure
             if (-not $response.OutputStream.CanWrite) {
                 continue
             }
@@ -1371,6 +2231,20 @@ try {
             }
             else {
                 500
+            }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -like '/api/*') {
+                try {
+                    Write-WebAuditRecord -Action "API operation rejected: $($request.Url.AbsolutePath)" `
+                        -Actor $(if ($session) { $session.Username } else { '' }) `
+                        -Outcome 'Rejected' -Details @{
+                            Method = $request.HttpMethod
+                            ErrorType = $_.Exception.GetType().Name
+                            HttpStatus = $statusCode
+                        }
+                }
+                catch {
+                    Write-WebHostLog -Level Critical -Message "Could not audit rejected API request '$($request.Url.AbsolutePath)': $($_.Exception.Message)"
+                }
             }
             try {
                 Send-WebJson -Response $response -StatusCode $statusCode -Value @{ error = $_.Exception.Message }

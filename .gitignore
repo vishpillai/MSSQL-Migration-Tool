@@ -11,6 +11,7 @@ reports/
 auth.json
 DbMigrationWeb/
 WebHost-*.log
+portable/logs/
 
 # Local editor and PowerShell artifacts
 .vscode/
