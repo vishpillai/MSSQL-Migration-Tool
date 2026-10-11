@@ -32,6 +32,12 @@ function Get-FreeTcpPort {
 }
 
 Import-Module (Join-Path $AppRoot 'src\DbMigration.WebAuth.psm1') -Force
+$existingInstance = $null
+if ([System.Threading.Mutex]::TryOpenExisting('Global\DbMigrationToolWebHost', [ref]$existingInstance)) {
+    $existingInstance.Dispose()
+    Write-Host 'Another Database Migration web host is already running on this machine. Only one instance can run at a time; use the open browser tab or close the existing host first.'
+    return
+}
 $storage = Resolve-MigrationWebStoragePaths -AppRoot $AppRoot -PortableMode
 
 if (-not (Test-Path -LiteralPath $storage.AuthPath -PathType Leaf)) {

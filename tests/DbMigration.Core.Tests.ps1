@@ -290,6 +290,22 @@ Describe 'Web patch target resolution' {
     }
 }
 
+Describe 'Web host script safeguards' {
+    BeforeAll {
+        $script:webHostText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Invoke-DbMigrationWeb.ps1') -Raw
+    }
+
+    It 'never passes a comparison parameter twice to Where-Object' {
+        $script:webHostText | Should -Not -Match 'Where-Object\s+\w+\s+-(ne|eq|gt|lt)\s+[^|)]*\s-and\s'
+    }
+
+    It 'enforces a single machine-wide web host instance' {
+        $script:webHostText | Should -Match "Global\\\\DbMigrationToolWebHost"
+        $portableText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -Raw
+        $portableText | Should -Match "Global\\\\DbMigrationToolWebHost"
+    }
+}
+
 Describe 'Web pair backup path requirement' {
     BeforeAll {
         $ast = [System.Management.Automation.Language.Parser]::ParseFile(

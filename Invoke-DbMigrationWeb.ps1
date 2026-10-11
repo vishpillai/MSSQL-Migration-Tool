@@ -884,6 +884,19 @@ function Start-WebSqlServerPatch {
     }
 }
 
+$script:InstanceMutex = [System.Threading.Mutex]::new($false, 'Global\DbMigrationToolWebHost')
+$script:HasInstanceLock = $false
+try {
+    $script:HasInstanceLock = $script:InstanceMutex.WaitOne(0)
+}
+catch [System.Threading.AbandonedMutexException] {
+    $script:HasInstanceLock = $true
+}
+if (-not $script:HasInstanceLock) {
+    $script:InstanceMutex.Dispose()
+    throw 'Another Database Migration web host is already running on this machine. Only one instance can run at a time; close the existing one first.'
+}
+
 $script:Listener.Start()
 Write-Output "Database migration browser UI: $($script:Origin)/"
 Write-Output "Web host log: $($script:HostLogPath)"
@@ -1123,7 +1136,7 @@ try {
                     results = $results
                     eligibleCount = @($results | Where-Object Status -eq 'Eligible').Count
                     alreadyInstalledCount = @($results | Where-Object Status -eq 'AlreadyInstalled').Count
-                    blockedCount = @($results | Where-Object Status -ne 'Eligible' -and Status -ne 'AlreadyInstalled').Count
+                    blockedCount = @($results | Where-Object { $_.Status -ne 'Eligible' -and $_.Status -ne 'AlreadyInstalled' }).Count
                     assessedAt = [DateTime]::UtcNow.ToString('o')
                 }
                 continue
@@ -1369,6 +1382,10 @@ finally {
     Write-WebHostLog -Level Information -Message 'Web host is shutting down.'
     $script:Listener.Stop()
     $script:Listener.Close()
+    if ($script:HasInstanceLock) {
+        $script:InstanceMutex.ReleaseMutex()
+        $script:InstanceMutex.Dispose()
+    }
     if (-not ($script:MigrationProcess -and -not $script:MigrationProcess.HasExited)) {
         foreach ($path in @($script:RuntimeConfigPath, $script:ProgressPath)) {
             if ($path -and (Test-Path -LiteralPath $path)) {
