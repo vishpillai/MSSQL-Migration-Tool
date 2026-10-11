@@ -1,4 +1,4 @@
-# dbatools SQL Server migration framework
+# MSSQL-Migration-Tool
 
 **Version:** 1.0.0 — see [CHANGELOG.md](CHANGELOG.md) for release history.
 
