@@ -191,6 +191,8 @@ Start the host as the dedicated Windows account. On a fresh application-auth ins
   -Port 8443
 ```
 
+The first application account is the installation **Super Admin**. Open **Administration** to create application users and grant only the required workspaces: Migration, Patching, Live server monitor, Custom SQL, Disk usage, and Logs & audit. Grants are checked by the web host on every feature API request; changing or disabling a user's grants ends that user's active sessions. The Super Admin cannot be disabled or deleted through the UI. White-label settings are installation-local and Super Admin-only: product and organization text, login copy, Light/Dark/Blue theme, accent color, and an optional embedded PNG/JPEG logo (maximum 256 KiB). Existing single-account auth files are migrated in place with their account retained as Super Admin. Windows Integrated Authentication currently grants all workspaces to authorized group members and does not expose application user or branding administration.
+
 For on-premises Active Directory sign-in instead, start the HTTPS host with Windows Integrated Authentication and an AD security group:
 
 ```powershell
@@ -203,7 +205,7 @@ For on-premises Active Directory sign-in instead, start the HTTPS host with Wind
 
 Windows mode uses Negotiate and requires HTTPS, a domain service account, and an HTTP SPN for the host DNS name registered to that account for Kerberos. Configure clients to allow integrated authentication for the site. The app checks AD group membership on each request; SQL and file operations still run as the host account. Per-user SQL credentials require separate Kerberos constrained delegation and are not enabled by this mode.
 
-Open `https://db-migration.contoso.com:8443/` from an authorized client. Restrict inbound firewall access to the intended client network. In either auth mode, SQL connections and file/report access run under the Windows identity hosting the web app, not the browser user's Windows identity. Run the host under a dedicated least-privilege account with only the required SQL and file permissions. Any authenticated application user or member of the configured AD group can operate every configured migration pair. The app enforces same-origin POST requests and does not provide unauthenticated endpoints for migration actions.
+Open `https://db-migration.contoso.com:8443/` from an authorized client. Restrict inbound firewall access to the intended client network. In either auth mode, SQL connections and file/report access run under the Windows identity hosting the web app, not the browser user's Windows identity. Run the host under a dedicated least-privilege account with only the required SQL and file permissions. Application users can call only APIs for their granted workspaces; Windows-authenticated group members currently receive all workspaces. The app enforces same-origin mutating requests and does not provide unauthenticated endpoints for migration actions.
 
 Do not stop the web host while a migration is running. It does not offer a cancellation control because terminating a backup or restore mid-operation can leave work requiring investigation. Review the normal migration reports and state file when the run completes.
 

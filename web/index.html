@@ -517,6 +517,60 @@
       --info: #1769aa;
       --info-bg: #eaf4fb;
     }
+    html[data-theme="Dark"] {
+      color-scheme: dark;
+      --canvas: #101923;
+      --surface: #172532;
+      --surface-subtle: #1d3040;
+      --line: #35495b;
+      --text-primary: #e6eef5;
+      --text-muted: #afbdc9;
+      --success-bg: #183b2c;
+      --warning-bg: #473914;
+      --danger-bg: #461f25;
+      --info-bg: #18374d;
+    }
+    html[data-theme="Blue"] {
+      color-scheme: light;
+      --canvas: #eaf2f9;
+      --surface: #fafdff;
+      --surface-subtle: #e4eff8;
+      --line: #c7d8e7;
+      --text-primary: #173650;
+      --text-muted: #506b82;
+      --info-bg: #dfedf8;
+    }
+    html[data-theme="Blue"] body,
+    html[data-theme="Blue"] main { color: var(--text-primary); background: var(--canvas); }
+    html[data-theme="Blue"] .card { background: var(--surface); border-color: var(--line); }
+    html[data-theme="Blue"] h2,
+    html[data-theme="Blue"] .migration-setup-disclosure > summary,
+    html[data-theme="Blue"] .patch-panel summary { color: var(--text-primary); background: var(--surface-subtle); border-color: var(--line); }
+    html[data-theme="Dark"] body,
+    html[data-theme="Dark"] main { color: var(--text-primary); background: var(--canvas); }
+    html[data-theme="Dark"] .card,
+    html[data-theme="Dark"] .live-monitor-card,
+    html[data-theme="Dark"] .live-monitor-metric,
+    html[data-theme="Dark"] .live-monitor-trend,
+    html[data-theme="Dark"] .custom-sql-result-set,
+    html[data-theme="Dark"] .disk-server-card { color: var(--text-primary); background: var(--surface); border-color: var(--line); }
+    html[data-theme="Dark"] h2,
+    html[data-theme="Dark"] .migration-setup-disclosure > summary,
+    html[data-theme="Dark"] .patch-panel summary { color: var(--text-primary); background: var(--surface-subtle); border-color: var(--line); }
+    html[data-theme="Dark"] input:not([type="checkbox"]):not([type="color"]):not([type="file"]),
+    html[data-theme="Dark"] select,
+    html[data-theme="Dark"] textarea { color: var(--text-primary); background: #101923; border-color: var(--line); }
+    html[data-theme="Dark"] table td,
+    html[data-theme="Dark"] th { color: var(--text-primary); background: var(--surface); border-color: var(--line); }
+    html[data-theme="Dark"] footer { color: var(--text-muted); background: var(--surface); border-color: var(--line); }
+    html[data-theme="Dark"] .muted,
+    html[data-theme="Dark"] label { color: var(--text-muted); }
+    html[data-theme="Dark"] .pair-card,
+    html[data-theme="Dark"] .patch-panel,
+    html[data-theme="Dark"] .custom-sql-export-toolbar { color: var(--text-primary); background: var(--surface-subtle); border-color: var(--line); }
+    #brand-logo { width: auto; max-width: 150px; max-height: 38px; object-fit: contain; margin-right: 10px; }
+    .admin-user-card { margin: 10px 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); }
+    .admin-user-card h4 { margin: 0 0 10px; }
     body { color: var(--text-primary); background: var(--canvas); }
     header { min-height: 68px; padding: 10px 22px; box-shadow: 0 2px 10px rgba(18, 44, 70, .14); }
     main { max-width: none; padding: 18px clamp(12px, 2vw, 28px); }
@@ -598,14 +652,15 @@
 </head>
 <body>
   <header>
-    <div class="brand"><h1>Database Migration</h1><span class="header-context">SQL Server management workspace</span></div>
+    <div class="brand"><img id="brand-logo" class="hidden" alt=""><h1 id="brand-product-name">Database Migration</h1><span id="brand-header-subtitle" class="header-context">SQL Server management workspace</span></div>
     <nav id="app-navigation" class="app-navigation hidden" aria-label="Workspace sections">
-      <a href="#migration-setup" id="migration-navigation-link">Migration</a>
-      <a href="#patch-panel" id="patch-navigation-link">Patching</a>
-      <a href="#live-server-monitor-workspace">Live server monitor</a>
-      <a href="#custom-sql-workspace">Custom SQL</a>
-      <a href="#disk-usage-workspace">Disk usage</a>
-      <a href="#reporting-workspace" id="reports-navigation-link">Logs &amp; audit</a>
+      <a href="#migration-setup" id="migration-navigation-link" data-feature="Migration">Migration</a>
+      <a href="#patch-panel" id="patch-navigation-link" data-feature="Patching">Patching</a>
+      <a href="#live-server-monitor-workspace" data-feature="LiveMonitor">Live server monitor</a>
+      <a href="#custom-sql-workspace" data-feature="CustomSql">Custom SQL</a>
+      <a href="#disk-usage-workspace" data-feature="DiskUsage">Disk usage</a>
+      <a href="#reporting-workspace" id="reports-navigation-link" data-feature="LogsAudit">Logs &amp; audit</a>
+      <a href="#admin-workspace" id="admin-navigation-link" data-admin-only class="hidden">Administration</a>
     </nav>
     <div class="header-actions">
       <span id="current-user" class="header-context"></span>
@@ -665,8 +720,8 @@
           </g>
         </svg>
         <span class="login-visual-label">SQL SERVER · MIGRATION WORKSPACE</span>
-        <h3>Move your data with confidence.</h3>
-        <p>Plan, migrate, and monitor SQL Server environments from one secure workspace.</p>
+        <h3 id="brand-login-headline">Move your data with confidence.</h3>
+        <p id="brand-login-description">Plan, migrate, and monitor SQL Server environments from one secure workspace.</p>
       </div>
       <section id="first-run-setup" class="hidden" style="padding:20px">
         <h3>Create the first administrator</h3>
@@ -697,7 +752,52 @@
     </section>
 
     <div id="application" class="hidden">
-      <section id="reporting-workspace" class="card">
+      <section id="no-features" class="card hidden">
+        <h2>No feature access</h2>
+        <p class="muted">Your account does not currently have access to any workspace. Ask the installation Super Admin to grant access.</p>
+      </section>
+      <section id="admin-workspace" class="card" data-admin-only hidden>
+        <h2>Installation administration</h2>
+        <p class="muted">Manage this installation’s user accounts, feature access, theme, and white-label settings. Branding is local to this client installation.</p>
+        <div id="admin-error" class="error" role="alert"></div>
+        <div id="admin-status" class="muted" role="status" aria-live="polite"></div>
+        <section class="card" style="margin-top:16px">
+          <h3>Application users</h3>
+          <div id="admin-users" class="table-wrap"></div>
+          <h4>Create user</h4>
+          <form id="create-user-form">
+            <div class="row">
+              <div class="grow"><label for="new-user-username">Username</label><input id="new-user-username" type="text" maxlength="128" autocomplete="off" required></div>
+              <div class="grow"><label for="new-user-password">Password (14 characters minimum)</label><input id="new-user-password" type="password" minlength="14" maxlength="1024" autocomplete="new-password" required></div>
+              <div class="grow"><label for="new-user-password-confirmation">Confirm password</label><input id="new-user-password-confirmation" type="password" minlength="14" maxlength="1024" autocomplete="new-password" required></div>
+            </div>
+            <fieldset style="margin:12px 0;padding:10px;border:1px solid var(--line);border-radius:8px">
+              <legend>Feature access</legend><div id="new-user-features" class="row"></div>
+            </fieldset>
+            <button type="submit">Create user</button>
+          </form>
+        </section>
+        <section class="card" style="margin-top:16px">
+          <h3>Theme and white-label branding</h3>
+          <form id="branding-form">
+            <div class="row">
+              <div class="grow"><label for="brand-product-name">Product name</label><input id="brand-product-name" type="text" maxlength="64" required></div>
+              <div class="grow"><label for="brand-organization-name">Organization</label><input id="brand-organization-name" type="text" maxlength="100" required></div>
+              <div class="grow"><label for="brand-header-subtitle">Header subtitle</label><input id="brand-header-subtitle" type="text" maxlength="100" required></div>
+            </div>
+            <label for="brand-login-headline" style="margin-top:12px">Login headline</label><input id="brand-login-headline" type="text" maxlength="120" required>
+            <label for="brand-login-description" style="margin-top:12px">Login description</label><input id="brand-login-description" type="text" maxlength="240" required>
+            <div class="row" style="margin-top:12px">
+              <div class="grow"><label for="brand-theme">Theme</label><select id="brand-theme"><option>Light</option><option>Dark</option><option>Blue</option></select></div>
+              <div class="grow"><label for="brand-accent-color">Accent color</label><input id="brand-accent-color" type="color" value="#1769aa"></div>
+              <div class="grow"><label for="brand-logo-file">Logo (PNG or JPEG, max 256 KiB)</label><input id="brand-logo-file" type="file" accept="image/png,image/jpeg"></div>
+            </div>
+            <div class="row" style="margin-top:12px"><button type="submit">Save branding</button><button id="remove-brand-logo" class="secondary" type="button">Remove logo</button></div>
+            <div id="branding-error" class="error" role="alert"></div>
+          </form>
+        </section>
+      </section>
+      <section id="reporting-workspace" class="card" data-feature="LogsAudit">
         <h2>Logs &amp; audit</h2>
         <p class="muted">Review durable migration and patch summaries, application audit events, and recent host/run logs. Custom SQL audit records include target and database metadata only; statement text and credentials are never stored.</p>
         <div class="row">
@@ -766,7 +866,7 @@
         <h3>Recent logs</h3>
         <div id="logs-report-table" class="table-wrap"></div>
       </section>
-      <section id="migration-setup" class="card">
+      <section id="migration-setup" class="card" data-feature="Migration">
         <details id="migration-setup-details" class="migration-setup-disclosure" open>
           <summary>Configure up to 3 source / target pairs</summary>
           <div id="migration-setup-content">
@@ -858,7 +958,7 @@
         </section>
       </section>
 
-      <section id="patch-workspace" class="card">
+      <section id="patch-workspace" class="card" data-feature="Patching">
         <details id="patch-panel" class="patch-panel" open>
           <summary>Patch selected SQL instances</summary>
           <div class="patch-content">
@@ -890,7 +990,7 @@
         </details>
       </section>
 
-      <section id="custom-sql-workspace" class="card">
+      <section id="custom-sql-workspace" class="card" data-feature="CustomSql">
         <h2>Run custom T-SQL</h2>
         <p class="muted">Run against a configured pair endpoint, an individual server, or multiple independent SQL instances.</p>
         <div class="grow" style="margin-bottom:10px">
@@ -966,7 +1066,7 @@
         <div id="custom-sql-results" class="table-wrap hidden" style="margin-top:12px"></div>
       </section>
 
-      <section id="disk-usage-workspace" class="card">
+      <section id="disk-usage-workspace" class="card" data-feature="DiskUsage">
         <h2>Server disk usage</h2>
         <p class="muted">View used and free capacity for every volume on one or more SQL Server hosts. Green indicates less than 80% used, amber 80-89%, and red 90% or more. Connections use the web host's Windows identity and require permission to connect to SQL Server and read remote disk inventory.</p>
         <label for="disk-sql-instances">SQL instances (one per line or comma-separated)</label>
@@ -980,7 +1080,7 @@
         <div id="disk-usage-results" class="disk-results" aria-live="polite"></div>
       </section>
 
-      <section id="live-server-monitor-workspace" class="card">
+      <section id="live-server-monitor-workspace" class="card" data-feature="LiveMonitor">
         <h2>Live server monitor</h2>
         <p class="muted">Monitor SQL health using transient 15-second snapshots. CPU, memory, disk capacity, and storage latency are graphed with rolling in-memory trends and threshold alerts; active requests and blocking are shown separately. Nothing from these snapshots is written to application logs, audit logs, or disk.</p>
         <p class="muted">When a migration starts, its source and target instances are selected and monitored automatically. The web host identity needs SQL connectivity and server-state permission (VIEW SERVER STATE; SQL Server 2022+ may require VIEW SERVER PERFORMANCE STATE).</p>
@@ -1030,7 +1130,7 @@
       </div>
     </form>
   </dialog>
-  <footer><span>© 2026 Vishal Pillai</span><span>SQL Server Migration Tool</span></footer>
+  <footer><span id="brand-footer-organization">© 2026 Vishal Pillai</span><span id="brand-footer-product">SQL Server Migration Tool</span></footer>
   <datalist id="history-servers"></datalist>
   <datalist id="history-paths"></datalist>
   <script>
@@ -1040,6 +1140,8 @@
     const migrationSetupStateKey = "dbMigrationSetupExpanded.v1";
     const patchPanelStateKey = "dbMigrationPatchExpanded.v1";
     const rememberedUsernameKey = "dbMigrationRememberedUsername.v1";
+    let currentSession = null;
+    let currentBranding = null;
 
     function loadHistory() {
       try {
@@ -1138,9 +1240,9 @@
     const liveMonitorDiskCounters = new Map();
     const outcomes = new Map();
 
-    async function api(path, body, signal) {
+    async function api(path, body, signal, method = body === undefined ? "GET" : "POST") {
       const response = await fetch(path, {
-        method: body === undefined ? "GET" : "POST",
+        method,
         headers: body === undefined ? {} : { "Content-Type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
         credentials: "same-origin",
@@ -1162,6 +1264,277 @@
       }
       return payload;
     }
+
+    const featureLabels = {
+      Migration: "Migration",
+      Patching: "Patching",
+      LiveMonitor: "Live server monitor",
+      CustomSql: "Custom SQL",
+      DiskUsage: "Disk usage",
+      LogsAudit: "Logs & audit"
+    };
+
+    function hasFeature(feature) {
+      return currentSession?.authMode === "Windows" || currentSession?.features?.includes(feature) === true;
+    }
+
+    function applyBranding(branding) {
+      if (!branding || typeof branding !== "object") return;
+      currentBranding = branding;
+      $("brand-product-name").textContent = branding.ProductName;
+      $("brand-header-subtitle").textContent = branding.HeaderSubtitle;
+      $("brand-login-headline").textContent = branding.LoginHeadline;
+      $("brand-login-description").textContent = branding.LoginDescription;
+      $("brand-footer-organization").textContent = `© ${new Date().getFullYear()} ${branding.OrganizationName}`;
+      $("brand-footer-product").textContent = branding.ProductName;
+      document.title = branding.ProductName;
+      document.documentElement.dataset.theme = branding.Theme || "Light";
+      const accent = /^#[0-9a-f]{6}$/i.test(branding.AccentColor || "") ? branding.AccentColor : "#1769aa";
+      document.documentElement.style.setProperty("--accent", accent);
+      document.documentElement.style.setProperty("--info", accent);
+      const logo = $("brand-logo");
+      if (branding.LogoDataUri) {
+        logo.src = branding.LogoDataUri;
+        logo.classList.remove("hidden");
+      } else {
+        logo.removeAttribute("src");
+        logo.classList.add("hidden");
+      }
+    }
+
+    function configureSessionAccess(session) {
+      currentSession = session;
+      const features = new Set(session?.features || []);
+      let visibleWorkspaceCount = 0;
+      for (const element of document.querySelectorAll("[data-feature]")) {
+        const allowed = session?.authMode === "Windows" || features.has(element.dataset.feature);
+        element.classList.toggle("hidden", !allowed);
+        if (element.matches("#app-navigation a") && allowed) visibleWorkspaceCount++;
+      }
+      const isSuperAdmin = session?.authMode !== "Windows" && session?.superAdmin === true;
+      for (const element of document.querySelectorAll("[data-admin-only]")) {
+        element.classList.toggle("hidden", !isSuperAdmin);
+        if (element.tagName === "SECTION") element.hidden = !isSuperAdmin;
+      }
+      $("admin-log-reset").classList.toggle("hidden", !isSuperAdmin || !features.has("LogsAudit"));
+      $("no-features").classList.toggle("hidden", visibleWorkspaceCount > 0 || isSuperAdmin);
+      applyBranding(session?.branding);
+    }
+
+    function renderFeatureCheckboxes(container, features, selected = []) {
+      container.replaceChildren();
+      for (const feature of features) {
+        const label = document.createElement("label");
+        label.className = "check";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = feature;
+        checkbox.checked = selected.includes(feature);
+        label.append(checkbox, document.createTextNode(featureLabels[feature] || feature));
+        container.append(label);
+      }
+    }
+
+    function getSelectedFeatures(container) {
+      return [...container.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+    }
+
+    function renderAdminUsers(users, features) {
+      const container = $("admin-users");
+      container.replaceChildren();
+      if (!users.length) {
+        container.textContent = "No application users were found.";
+        return;
+      }
+      for (const user of users) {
+        const card = document.createElement("article");
+        card.className = "admin-user-card";
+        const heading = document.createElement("h4");
+        heading.textContent = `${user.Username} · ${user.Role}${user.Enabled ? "" : " · Disabled"}`;
+        card.append(heading);
+        const grants = document.createElement("div");
+        grants.className = "row";
+        renderFeatureCheckboxes(grants, features, user.Features || []);
+        card.append(grants);
+        if (user.Role !== "SuperAdmin") {
+          const enabledLabel = document.createElement("label");
+          enabledLabel.className = "check";
+          const enabled = document.createElement("input");
+          enabled.type = "checkbox";
+          enabled.checked = user.Enabled;
+          enabledLabel.append(enabled, document.createTextNode("Account enabled"));
+          card.append(enabledLabel);
+          const actions = document.createElement("div");
+          actions.className = "row";
+          const save = document.createElement("button");
+          save.type = "button";
+          save.textContent = "Save access";
+          save.addEventListener("click", async () => {
+            save.disabled = true;
+            $("admin-error").textContent = "";
+            try {
+              await api("/api/admin/users", {
+                Username: user.Username,
+                Features: getSelectedFeatures(grants),
+                Enabled: enabled.checked
+              }, undefined, "PUT");
+              $("admin-status").textContent = `Access updated for ${user.Username}. Their active sessions were signed out.`;
+              await loadAdminUsers();
+            } catch (error) {
+              $("admin-error").textContent = error.message;
+            } finally {
+              save.disabled = false;
+            }
+          });
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "secondary";
+          remove.textContent = "Delete user";
+          remove.addEventListener("click", async () => {
+            if (!window.confirm(`Delete application user "${user.Username}"? This cannot be undone.`)) return;
+            remove.disabled = true;
+            $("admin-error").textContent = "";
+            try {
+              await api("/api/admin/users", { Username: user.Username }, undefined, "DELETE");
+              $("admin-status").textContent = `Deleted ${user.Username}.`;
+              await loadAdminUsers();
+            } catch (error) {
+              $("admin-error").textContent = error.message;
+            } finally {
+              remove.disabled = false;
+            }
+          });
+          actions.append(save, remove);
+          card.append(actions);
+        } else {
+          for (const checkbox of grants.querySelectorAll("input")) checkbox.disabled = true;
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "The installation Super Admin always has all features and cannot be disabled or deleted.";
+          card.append(note);
+        }
+        container.append(card);
+      }
+    }
+
+    async function loadAdminUsers() {
+      const result = await api("/api/admin/users");
+      renderAdminUsers(result.users || [], result.features || []);
+      renderFeatureCheckboxes($("new-user-features"), result.features || []);
+    }
+
+    function fillBrandingForm(branding) {
+      $("brand-product-name").value = branding.ProductName || "";
+      $("brand-organization-name").value = branding.OrganizationName || "";
+      $("brand-header-subtitle").value = branding.HeaderSubtitle || "";
+      $("brand-login-headline").value = branding.LoginHeadline || "";
+      $("brand-login-description").value = branding.LoginDescription || "";
+      $("brand-theme").value = branding.Theme || "Light";
+      $("brand-accent-color").value = branding.AccentColor || "#1769aa";
+    }
+
+    async function loadAdminWorkspace() {
+      if (currentSession?.superAdmin !== true || currentSession?.authMode === "Windows") return;
+      $("admin-error").textContent = "";
+      $("admin-status").textContent = "Loading installation settings…";
+      try {
+        const [usersResult, brandingResult] = await Promise.all([
+          api("/api/admin/users"),
+          api("/api/admin/branding")
+        ]);
+        renderAdminUsers(usersResult.users || [], usersResult.features || []);
+        renderFeatureCheckboxes($("new-user-features"), usersResult.features || []);
+        currentSession.branding = brandingResult.branding;
+        applyBranding(brandingResult.branding);
+        fillBrandingForm(brandingResult.branding);
+        $("admin-status").textContent = "Installation settings loaded.";
+      } catch (error) {
+        $("admin-status").textContent = "";
+        $("admin-error").textContent = error.message;
+      }
+    }
+
+    $("create-user-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = $("create-user-form").querySelector('button[type="submit"]');
+      submit.disabled = true;
+      $("admin-error").textContent = "";
+      $("admin-status").textContent = "";
+      try {
+        const result = await api("/api/admin/users", {
+          Username: $("new-user-username").value.trim(),
+          Password: $("new-user-password").value,
+          PasswordConfirmation: $("new-user-password-confirmation").value,
+          Features: getSelectedFeatures($("new-user-features"))
+        });
+        $("create-user-form").reset();
+        $("admin-status").textContent = `Created application user ${result.user.Username}.`;
+        await loadAdminUsers();
+      } catch (error) {
+        $("admin-error").textContent = error.message;
+      } finally {
+        $("new-user-password").value = "";
+        $("new-user-password-confirmation").value = "";
+        submit.disabled = false;
+      }
+    });
+
+    async function saveBranding(branding) {
+      const result = await api("/api/admin/branding", { Branding: branding }, undefined, "PUT");
+      currentSession.branding = result.branding;
+      applyBranding(result.branding);
+      fillBrandingForm(result.branding);
+      $("branding-error").textContent = "";
+      $("admin-status").textContent = "Branding and theme saved for this installation.";
+    }
+
+    $("branding-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = $("branding-form").querySelector('button[type="submit"]');
+      submit.disabled = true;
+      $("branding-error").textContent = "";
+      try {
+        let logoDataUri = currentBranding?.LogoDataUri || "";
+        const file = $("brand-logo-file").files[0];
+        if (file) {
+          if (!["image/png", "image/jpeg"].includes(file.type) || file.size > 262144) {
+            throw new Error("Choose a PNG or JPEG logo no larger than 256 KiB.");
+          }
+          logoDataUri = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => reject(new Error("The selected logo could not be read."));
+            reader.readAsDataURL(file);
+          });
+        }
+        await saveBranding({
+          ProductName: $("brand-product-name").value,
+          OrganizationName: $("brand-organization-name").value,
+          HeaderSubtitle: $("brand-header-subtitle").value,
+          LoginHeadline: $("brand-login-headline").value,
+          LoginDescription: $("brand-login-description").value,
+          Theme: $("brand-theme").value,
+          AccentColor: $("brand-accent-color").value,
+          LogoDataUri: logoDataUri
+        });
+        $("brand-logo-file").value = "";
+      } catch (error) {
+        $("branding-error").textContent = error.message;
+      } finally {
+        submit.disabled = false;
+      }
+    });
+
+    $("remove-brand-logo").addEventListener("click", async () => {
+      $("branding-error").textContent = "";
+      try {
+        const branding = { ...currentBranding, LogoDataUri: "" };
+        await saveBranding(branding);
+        $("brand-logo-file").value = "";
+      } catch (error) {
+        $("branding-error").textContent = error.message;
+      }
+    });
 
     function showAppDialog({ title, message, kind = "info", confirm = false, confirmLabel = "Continue" }) {
       const dialog = $("app-dialog");
@@ -1667,23 +2040,25 @@
       suppressExistingEventReplay = true;
     }
 
-    function showApplication(authenticated, authMode = "Application", username = "") {
+    function showApplication(authenticated, authMode = "Application", username = "", session = null) {
       const windowsAuth = authMode === "Windows";
       if (authenticated !== applicationAuthenticated) resetTransientSessionUi();
       applicationAuthenticated = authenticated;
+      configureSessionAccess(authenticated ? { ...(session || {}), authMode, username } : null);
       $("login-card").classList.toggle("hidden", authenticated || windowsAuth);
       $("application").classList.toggle("hidden", !authenticated);
       $("app-navigation").classList.toggle("hidden", !authenticated);
       $("logout").classList.toggle("hidden", !authenticated || windowsAuth);
-      $("admin-log-reset").classList.toggle("hidden", !authenticated || windowsAuth);
       $("current-user").textContent = authenticated && username ? `Signed in as ${username}` : "";
       $("first-run-setup").classList.toggle("hidden", !firstRunSetupRequired || authenticated || windowsAuth);
       $("login-form").classList.toggle("hidden", firstRunSetupRequired || windowsAuth);
       $("login-card").querySelector("h2").textContent = firstRunSetupRequired ? "First-run setup" : "Sign in";
       if (authenticated) {
         firstRunSetupRequired = false;
-        initializePairs();
-        if (!$("app-navigation").querySelector('[aria-current="page"]')) $("migration-navigation-link").click();
+        if (hasFeature("Migration")) initializePairs();
+        const firstAvailableLink = [...$("app-navigation").querySelectorAll("a")]
+          .find((link) => !link.classList.contains("hidden"));
+        if (!$("app-navigation").querySelector('[aria-current="page"]') && firstAvailableLink) firstAvailableLink.click();
       } else {
         resetWorkspaceView();
       }
@@ -1759,6 +2134,7 @@
         $("application").classList.add("reports-view");
         refreshReporting();
       }
+      if (workspace.id === "admin-workspace") void loadAdminWorkspace();
       window.scrollTo(0, 0);
     });
 
@@ -3462,7 +3838,7 @@
           if ($("remember-username").checked) localStorage.setItem(rememberedUsernameKey, username);
         } catch (_) {}
         firstRunSetupRequired = false;
-        showApplication(session.authenticated, "Application", session.username);
+        showApplication(session.authenticated, "Application", session.username, session);
       } catch (error) {
         $("setup-error").textContent = error.message;
       } finally {
@@ -4015,7 +4391,7 @@
       $("login-error").textContent = "";
       try {
         const username = $("username").value.trim();
-        await api("/api/login", { Username: username, Password: $("password").value });
+        const session = await api("/api/login", { Username: username, Password: $("password").value });
         try {
           if ($("remember-username").checked) localStorage.setItem(rememberedUsernameKey, username);
           else localStorage.removeItem(rememberedUsernameKey);
@@ -4023,7 +4399,7 @@
           $("login-error").textContent = `Signed in, but the username could not be saved: ${error.message}`;
         }
         $("password").value = "";
-        showApplication(true, "Application", username);
+        showApplication(true, "Application", username, session);
       } catch (error) {
         $("login-error").textContent = error.message;
       }
@@ -4311,9 +4687,12 @@
 
     async function pollMigration() {
       if (pollInProgress || $("application").classList.contains("hidden")) return;
+      if (!hasFeature("Migration") && !hasFeature("Patching") && !hasFeature("LogsAudit")) return;
       pollInProgress = true;
       try {
-        const status = await api("/api/status");
+        const status = hasFeature("Migration")
+          ? await api("/api/status")
+          : { runId: null, running: false, databaseCount: 0 };
         if (Number.isInteger(status.databaseCount)) {
           selectedDatabaseTotal = status.databaseCount;
           updateOutcomes(selectedDatabaseTotal);
@@ -4350,13 +4729,15 @@
             }
           }
           renderLiveMonitorTargets();
-          if (getSelectedLiveMonitorInstances().length) startLiveMonitor(true);
+          if (hasFeature("LiveMonitor") && getSelectedLiveMonitorInstances().length) startLiveMonitor(true);
         } else if (!status.running && status.runId &&
             status.runId === liveMonitorObservedRunId && liveMonitorStartedByMigration) {
           stopLiveMonitor();
           $("live-monitor-status").textContent = "Migration ended; automatic monitoring stopped.";
         }
-        const patchStatus = await api("/api/patch/status");
+        const patchStatus = hasFeature("Patching")
+          ? await api("/api/patch/status")
+          : { runId: null, running: false };
         patchActive = patchStatus.running;
         if (patchStatus.runId) {
           patchAction = patchStatus.action;
@@ -4378,14 +4759,16 @@
           setRunControlsLocked(migrationActive);
         }
         setRunControlsLocked(migrationActive || patchActive);
-        const result = await api(`/api/events?after=${eventCursor}`);
-        const suppressEvents = suppressExistingEventReplay;
-        for (const item of result.events) {
-          await appendEvent(item, { display: !suppressEvents, notify: !suppressEvents });
-          eventCursor = Math.max(eventCursor, Number(item.Id));
+        if (hasFeature("LogsAudit")) {
+          const result = await api(`/api/events?after=${eventCursor}`);
+          const suppressEvents = suppressExistingEventReplay;
+          for (const item of result.events) {
+            await appendEvent(item, { display: !suppressEvents, notify: !suppressEvents });
+            eventCursor = Math.max(eventCursor, Number(item.Id));
+          }
+          eventCursor = Math.max(eventCursor, Number(result.latestId) || 0);
+          if (suppressEvents) suppressExistingEventReplay = false;
         }
-        eventCursor = Math.max(eventCursor, Number(result.latestId) || 0);
-        if (suppressEvents) suppressExistingEventReplay = false;
       } catch (error) {
         if (error.message.includes("Authentication required")) showApplication(false);
       } finally {
@@ -4398,7 +4781,8 @@
       try {
         const session = await api("/api/session");
         firstRunSetupRequired = Boolean(session.setupRequired);
-        showApplication(session.authenticated, session.authMode, session.username);
+        applyBranding(session.branding);
+        showApplication(session.authenticated, session.authMode, session.username, session);
       } catch (_) {
         firstRunSetupRequired = false;
         showApplication(false);

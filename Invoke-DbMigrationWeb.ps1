@@ -49,11 +49,11 @@ $script:AuthRecord = $null
 $script:SetupToken = $null
 if ($script:AuthenticationMode -eq 'Application') {
     if (Test-Path -LiteralPath $fullAuthPath -PathType Leaf) {
-        $script:AuthRecord = Get-Content -LiteralPath $fullAuthPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
-        foreach ($property in @('Salt', 'PasswordHash', 'Iterations', 'Username')) {
-            if (-not $script:AuthRecord.Contains($property)) {
-                throw "Authentication record is missing '$property'. Re-run Initialize-DbMigrationWebAuth.ps1."
-            }
+        $loadedAuthRecord = Get-Content -LiteralPath $fullAuthPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
+        $legacyAuthRecord = -not $loadedAuthRecord.Contains('Users')
+        $script:AuthRecord = ConvertTo-MigrationWebAuthStore -Record $loadedAuthRecord
+        if ($legacyAuthRecord) {
+            Save-MigrationWebAuthRecord -Record $script:AuthRecord -Path $fullAuthPath -PortableMode:$PortableMode
         }
     }
     else {
@@ -388,6 +388,23 @@ function Read-WebRequestJson {
     }
 }
 
+function Find-WebApplicationUser {
+    param([Parameter(Mandatory)][string] $Username)
+    if (-not $script:AuthRecord -or -not $script:AuthRecord.Contains('Users')) {
+        return $null
+    }
+    foreach ($user in @($script:AuthRecord.Users)) {
+        if ([string]::Equals([string]$user.Username, $Username, [StringComparison]::OrdinalIgnoreCase)) {
+            return $user
+        }
+    }
+    return $null
+}
+
+function Save-WebApplicationAuthStore {
+    Save-MigrationWebAuthRecord -Record $script:AuthRecord -Path $fullAuthPath -PortableMode:$script:PortableMode
+}
+
 function Get-WebSession {
     param([Parameter(Mandatory)][System.Net.HttpListenerRequest] $Request)
     if ($script:AuthenticationMode -eq 'Windows') {
@@ -400,6 +417,8 @@ function Get-WebSession {
             Username = $windowsIdentity.Name
             ExpiresUtc = [DateTime]::MaxValue
             IsWindowsAuthenticated = $true
+            Role = 'Windows'
+            Features = @(Get-MigrationWebFeatureNames)
         }
     }
 
@@ -412,6 +431,13 @@ function Get-WebSession {
         $script:Sessions.Remove($cookie.Value)
         return $null
     }
+    $user = Find-WebApplicationUser -Username ([string]$session.Username)
+    if (-not $user -or -not $user.Enabled) {
+        $script:Sessions.Remove($cookie.Value)
+        return $null
+    }
+    $session.Role = [string]$user.Role
+    $session.Features = @($user.Features)
     $session.ExpiresUtc = [DateTime]::UtcNow.AddHours(8)
     return $session
 }
@@ -1268,10 +1294,17 @@ try {
                     username = if ($session) { $session.Username } else { '' }
                     authMode = $script:AuthenticationMode
                     setupRequired = $script:AuthenticationMode -eq 'Application' -and $null -eq $script:AuthRecord
+                    role = if ($session) { $session.Role } else { '' }
+                    features = if ($session) { @($session.Features) } else { @() }
+                    superAdmin = [bool]($session -and $session.Role -eq 'SuperAdmin')
+                    branding = if ($script:AuthRecord -and $script:AuthRecord.Contains('Branding')) {
+                        $script:AuthRecord.Branding
+                    } else { Get-MigrationWebDefaultBranding }
                 }
                 continue
             }
-            if ($request.HttpMethod -eq 'POST' -and $request.Headers['Origin'] -ne $script:Origin) {
+            if ($request.HttpMethod -in @('POST', 'PUT', 'PATCH', 'DELETE') -and
+                $request.Headers['Origin'] -ne $script:Origin) {
                 Send-WebJson -Response $response -StatusCode 403 -Value @{ error = 'Request origin is not allowed.' }
                 continue
             }
@@ -1338,32 +1371,50 @@ try {
                 try {
                     $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
                     $record = New-MigrationWebPasswordRecord -Username $username -Password $securePassword
-                    Save-MigrationWebAuthRecord -Record $record -Path $fullAuthPath `
-                        -PortableMode:$script:PortableMode -CreateOnly
+                    $superAdmin = [ordered]@{
+                        Username = $record.Username
+                        Salt = $record.Salt
+                        PasswordHash = $record.PasswordHash
+                        Iterations = $record.Iterations
+                        CreatedUtc = $record.CreatedUtc
+                        Role = 'SuperAdmin'
+                        Features = @(Get-MigrationWebFeatureNames)
+                        Enabled = $true
+                    }
+                    $newAuthStore = [ordered]@{
+                        SchemaVersion = 2
+                        Users = @($superAdmin)
+                        Branding = Get-MigrationWebDefaultBranding
+                    }
                 }
                 finally {
                     $password = ''
                     if ($securePassword) { $securePassword.Dispose() }
                 }
-                $script:AuthRecord = @{
-                    Username = $record.Username
-                    Salt = $record.Salt
-                    PasswordHash = $record.PasswordHash
-                    Iterations = $record.Iterations
-                    CreatedUtc = $record.CreatedUtc
-                }
+                Save-MigrationWebAuthRecord -Record $newAuthStore -Path $fullAuthPath `
+                    -PortableMode:$script:PortableMode -CreateOnly
+                $script:AuthRecord = $newAuthStore
                 $script:SetupToken = $null
                 $script:SetupAttempts.Remove($address)
                 $tokenBytes = [byte[]]::new(32)
                 [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
                 $token = [Convert]::ToBase64String($tokenBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
                 [Array]::Clear($tokenBytes, 0, $tokenBytes.Length)
-                $script:Sessions[$token] = @{ Username = [string]$script:AuthRecord.Username; ExpiresUtc = [DateTime]::UtcNow.AddHours(8) }
-                Write-WebAuditRecord -Action 'Initial administrator account created' -Actor $script:AuthRecord.Username -Outcome 'Succeeded'
+                $script:Sessions[$token] = @{
+                    Username = [string]$superAdmin.Username
+                    ExpiresUtc = [DateTime]::UtcNow.AddHours(8)
+                    Role = 'SuperAdmin'
+                    Features = @(Get-MigrationWebFeatureNames)
+                }
+                Write-WebAuditRecord -Action 'Initial administrator account created' -Actor $superAdmin.Username -Outcome 'Succeeded'
                 Set-WebSessionCookie -Response $response -Token $token
                 Send-WebJson -Response $response -StatusCode 201 -Value @{
                     authenticated = $true
-                    username = [string]$script:AuthRecord.Username
+                    username = [string]$superAdmin.Username
+                    role = 'SuperAdmin'
+                    features = @(Get-MigrationWebFeatureNames)
+                    superAdmin = $true
+                    branding = $newAuthStore.Branding
                 }
                 continue
             }
@@ -1372,7 +1423,7 @@ try {
                     Send-WebJson -Response $response -StatusCode 409 -Value @{ error = 'Application-password login is disabled while Windows authentication is active.'; authMode = 'Windows' }
                     continue
                 }
-                if ($null -eq $script:AuthRecord) {
+                if ($null -eq $script:AuthRecord -or @($script:AuthRecord.Users).Count -eq 0) {
                     Send-WebJson -Response $response -StatusCode 409 -Value @{ error = 'Create the first administrator account before signing in.'; setupRequired = $true }
                     continue
                 }
@@ -1388,7 +1439,9 @@ try {
                 if (-not $body.Contains('Username') -or -not $body.Contains('Password')) {
                     throw [ArgumentException]::new('Username and Password are required.')
                 }
-                $valid = Test-MigrationWebPassword -Record $script:AuthRecord -Username ([string]$body.Username) -Password ([string]$body.Password)
+                $account = Find-WebApplicationUser -Username ([string]$body.Username)
+                $valid = $account -and $account.Enabled -and
+                    (Test-MigrationWebPassword -Record $account -Username ([string]$account.Username) -Password ([string]$body.Password))
                 $body.Password = ''
                 if (-not $valid) {
                     $attempts += [DateTime]::UtcNow
@@ -1406,10 +1459,22 @@ try {
                 $tokenBytes = [byte[]]::new(32)
                 [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
                 $token = [Convert]::ToBase64String($tokenBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-                $script:Sessions[$token] = @{ Username = [string]$script:AuthRecord.Username; ExpiresUtc = [DateTime]::UtcNow.AddHours(8) }
-                Write-WebAuditRecord -Action 'User signed in' -Actor ([string]$script:AuthRecord.Username) -Outcome 'Succeeded'
+                $script:Sessions[$token] = @{
+                    Username = [string]$account.Username
+                    ExpiresUtc = [DateTime]::UtcNow.AddHours(8)
+                    Role = [string]$account.Role
+                    Features = @($account.Features)
+                }
+                Write-WebAuditRecord -Action 'User signed in' -Actor ([string]$account.Username) -Outcome 'Succeeded'
                 Set-WebSessionCookie -Response $response -Token $token
-                Send-WebJson -Response $response -StatusCode 200 -Value @{ authenticated = $true; username = [string]$script:AuthRecord.Username }
+                Send-WebJson -Response $response -StatusCode 200 -Value @{
+                    authenticated = $true
+                    username = [string]$account.Username
+                    role = [string]$account.Role
+                    features = @($account.Features)
+                    superAdmin = $account.Role -eq 'SuperAdmin'
+                    branding = $script:AuthRecord.Branding
+                }
                 continue
             }
 
@@ -1420,6 +1485,37 @@ try {
             }
             if ($script:AuthenticationMode -eq 'Windows' -and $script:AuditedWindowsPrincipals.Add([string]$session.Username)) {
                 Write-WebAuditRecord -Action 'Windows authentication observed' -Actor $session.Username -Outcome 'Succeeded'
+            }
+            $path = [string]$request.Url.AbsolutePath
+            $requiredFeature = switch -Regex ($path) {
+                '^/api/(defaults|linked-servers|validate-pair|readiness-assessment|discover|migrate|control|status)$' { 'Migration'; break }
+                '^/api/patch(?:/|$)' { 'Patching'; break }
+                '^/api/(custom-sql|discover-instance)$' { 'CustomSql|Patching'; break }
+                '^/api/disk-usage$' { 'DiskUsage'; break }
+                '^/api/live-monitor$' { 'LiveMonitor'; break }
+                '^/api/(reporting|audit|events)$' { 'LogsAudit'; break }
+                '^/api/admin/reset-logs$|^/api/patch/status$' {
+                    if ($path -eq '/api/patch/status') { 'Patching' } else { 'LogsAudit' }
+                    break
+                }
+                default { '' }
+            }
+            $requiredFeatures = @($requiredFeature -split '\|')
+            if ($requiredFeature -and -not @($requiredFeatures | Where-Object { $_ -in @($session.Features) })) {
+                Write-WebAuditRecord -Action 'Feature access denied' -Actor $session.Username -Outcome 'Denied' -Details @{
+                    Features = $requiredFeatures
+                    Path = $path
+                }
+                Send-WebJson -Response $response -StatusCode 403 -Value @{ error = "Access to '$($requiredFeatures -join ' or ')' is not granted." }
+                continue
+            }
+            if ($path -like '/api/admin/*' -and
+                ($script:AuthenticationMode -ne 'Application' -or $session.Role -ne 'SuperAdmin')) {
+                Write-WebAuditRecord -Action 'Super Admin operation denied' -Actor $session.Username -Outcome 'Denied' -Details @{
+                    Path = $path
+                }
+                Send-WebJson -Response $response -StatusCode 403 -Value @{ error = 'Only the installation Super Admin can manage users and branding.' }
+                continue
             }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/logout') {
                 if ($script:AuthenticationMode -eq 'Windows') {
@@ -1438,8 +1534,8 @@ try {
                 continue
             }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/admin/reset-logs') {
-                if ($script:AuthenticationMode -ne 'Application') {
-                    Send-WebJson -Response $response -StatusCode 409 -Value @{ error = 'Log reset with password confirmation is unavailable while Windows authentication is active.' }
+                if ($script:AuthenticationMode -ne 'Application' -or $session.Role -ne 'SuperAdmin') {
+                    Send-WebJson -Response $response -StatusCode 403 -Value @{ error = 'Only the installation Super Admin can reset logs.' }
                     continue
                 }
                 $address = [string]$request.RemoteEndPoint.Address
@@ -1457,8 +1553,9 @@ try {
                 $password = [string]$body.Password
                 $validPassword = $false
                 try {
-                    $validPassword = Test-MigrationWebPassword -Record $script:AuthRecord `
-                        -Username $session.Username -Password $password
+                    $adminAccount = Find-WebApplicationUser -Username $session.Username
+                    $validPassword = $adminAccount -and (Test-MigrationWebPassword -Record $adminAccount `
+                        -Username $adminAccount.Username -Password $password)
                 }
                 finally {
                     $password = ''
@@ -1503,6 +1600,167 @@ try {
                     auditResetRecorded = $true
                     reportsPreserved = $true
                 }
+                continue
+            }
+            if ($request.Url.AbsolutePath -eq '/api/admin/users') {
+                if ($request.HttpMethod -eq 'GET') {
+                    Send-WebJson -Response $response -StatusCode 200 -Value @{
+                        users = @($script:AuthRecord.Users | ForEach-Object { Get-MigrationWebSafeUser -User $_ })
+                        features = @(Get-MigrationWebFeatureNames)
+                    }
+                    continue
+                }
+                $body = Read-WebRequestJson -Request $request
+                if ($request.HttpMethod -eq 'POST') {
+                    foreach ($property in @('Username', 'Password', 'PasswordConfirmation', 'Features')) {
+                        if (-not $body.Contains($property)) {
+                            throw [ArgumentException]::new("$property is required.")
+                        }
+                    }
+                    if ($body.Features -isnot [array] -or
+                        @($body.Features | Where-Object { $_ -isnot [string] }).Count -gt 0) {
+                        throw [ArgumentException]::new('Features must be an array of feature names.')
+                    }
+                    if (-not [string]::Equals([string]$body.Password, [string]$body.PasswordConfirmation, [StringComparison]::Ordinal)) {
+                        $body.Password = ''
+                        $body.PasswordConfirmation = ''
+                        throw [ArgumentException]::new('The passwords do not match.')
+                    }
+                    $username = ([string]$body.Username).Trim()
+                    if (Find-WebApplicationUser -Username $username) {
+                        throw [ArgumentException]::new('That username is already in use.')
+                    }
+                    if (@($script:AuthRecord.Users).Count -ge 128) {
+                        throw [System.InvalidOperationException]::new('The maximum of 128 application users has been reached.')
+                    }
+                    $securePassword = $null
+                    try {
+                        $securePassword = ConvertTo-SecureString -String ([string]$body.Password) -AsPlainText -Force
+                        $newUser = New-MigrationWebUserRecord -Username $username -Password $securePassword `
+                            -Features @($body.Features)
+                    }
+                    finally {
+                        $body.Password = ''
+                        $body.PasswordConfirmation = ''
+                        if ($securePassword) { $securePassword.Dispose() }
+                    }
+                    $nextStore = $script:AuthRecord | ConvertTo-Json -Depth 8 | ConvertFrom-Json -AsHashtable
+                    $nextStore.Users = @($nextStore.Users) + @($newUser)
+                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath -PortableMode:$script:PortableMode
+                    $script:AuthRecord = $nextStore
+                    Write-WebAuditRecord -Action 'Application user created' -Actor $session.Username -Outcome 'Succeeded' -Details @{
+                        User = $username
+                        Features = @($newUser.Features)
+                    }
+                    Send-WebJson -Response $response -StatusCode 201 -Value @{
+                        user = Get-MigrationWebSafeUser -User $newUser
+                    }
+                    continue
+                }
+                if ($request.HttpMethod -eq 'PUT') {
+                    foreach ($property in @('Username', 'Features', 'Enabled')) {
+                        if (-not $body.Contains($property)) {
+                            throw [ArgumentException]::new("$property is required.")
+                        }
+                    }
+                    if ($body.Features -isnot [array] -or
+                        @($body.Features | Where-Object { $_ -isnot [string] }).Count -gt 0 -or
+                        $body.Enabled -isnot [bool]) {
+                        throw [ArgumentException]::new('Features must be a string array and Enabled must be a boolean.')
+                    }
+                    $targetUser = Find-WebApplicationUser -Username ([string]$body.Username)
+                    if (-not $targetUser) {
+                        Send-WebJson -Response $response -StatusCode 404 -Value @{ error = 'Application user not found.' }
+                        continue
+                    }
+                    if ($targetUser.Role -eq 'SuperAdmin') {
+                        throw [ArgumentException]::new('The installation Super Admin access cannot be changed.')
+                    }
+                    if ([string]::Equals($targetUser.Username, $session.Username, [StringComparison]::OrdinalIgnoreCase) -and -not $body.Enabled) {
+                        throw [ArgumentException]::new('You cannot disable your own account.')
+                    }
+                    $unknownFeatures = @($body.Features | Where-Object { $_ -notin (Get-MigrationWebFeatureNames) })
+                    if ($unknownFeatures.Count -gt 0) {
+                        throw [ArgumentException]::new("Unsupported feature grants: $($unknownFeatures -join ', ').")
+                    }
+                    $nextStore = $script:AuthRecord | ConvertTo-Json -Depth 8 | ConvertFrom-Json -AsHashtable
+                    $nextUser = @($nextStore.Users | Where-Object {
+                        [string]::Equals([string]$_.Username, [string]$targetUser.Username, [StringComparison]::OrdinalIgnoreCase)
+                    })[0]
+                    $nextUser.Features = @($body.Features | Select-Object -Unique)
+                    $nextUser.Enabled = [bool]$body.Enabled
+                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath -PortableMode:$script:PortableMode
+                    $script:AuthRecord = $nextStore
+                    foreach ($tokenKey in @($script:Sessions.Keys)) {
+                        if ([string]::Equals([string]$script:Sessions[$tokenKey].Username, [string]$targetUser.Username, [StringComparison]::OrdinalIgnoreCase)) {
+                            $script:Sessions.Remove($tokenKey)
+                        }
+                    }
+                    Write-WebAuditRecord -Action 'Application user access updated' -Actor $session.Username -Outcome 'Succeeded' -Details @{
+                        User = [string]$targetUser.Username
+                        Enabled = [bool]$body.Enabled
+                        Features = @($nextUser.Features)
+                    }
+                    Send-WebJson -Response $response -StatusCode 200 -Value @{
+                        user = Get-MigrationWebSafeUser -User $nextUser
+                    }
+                    continue
+                }
+                if ($request.HttpMethod -eq 'DELETE') {
+                    if (-not $body.Contains('Username')) {
+                        throw [ArgumentException]::new('Username is required.')
+                    }
+                    $targetUser = Find-WebApplicationUser -Username ([string]$body.Username)
+                    if (-not $targetUser) {
+                        Send-WebJson -Response $response -StatusCode 404 -Value @{ error = 'Application user not found.' }
+                        continue
+                    }
+                    if ($targetUser.Role -eq 'SuperAdmin' -or
+                        [string]::Equals($targetUser.Username, $session.Username, [StringComparison]::OrdinalIgnoreCase)) {
+                        throw [ArgumentException]::new('You cannot delete the Super Admin or your own account.')
+                    }
+                    $nextStore = $script:AuthRecord | ConvertTo-Json -Depth 8 | ConvertFrom-Json -AsHashtable
+                    $nextStore.Users = @($nextStore.Users | Where-Object {
+                        -not [string]::Equals([string]$_.Username, [string]$targetUser.Username, [StringComparison]::OrdinalIgnoreCase)
+                    })
+                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath -PortableMode:$script:PortableMode
+                    $script:AuthRecord = $nextStore
+                    foreach ($tokenKey in @($script:Sessions.Keys)) {
+                        if ([string]::Equals([string]$script:Sessions[$tokenKey].Username, [string]$targetUser.Username, [StringComparison]::OrdinalIgnoreCase)) {
+                            $script:Sessions.Remove($tokenKey)
+                        }
+                    }
+                    Write-WebAuditRecord -Action 'Application user deleted' -Actor $session.Username -Outcome 'Succeeded' -Details @{
+                        User = [string]$targetUser.Username
+                    }
+                    Send-WebJson -Response $response -StatusCode 200 -Value @{ deleted = $true }
+                    continue
+                }
+                Send-WebJson -Response $response -StatusCode 405 -Value @{ error = 'Method not allowed.' }
+                continue
+            }
+            if ($request.Url.AbsolutePath -eq '/api/admin/branding') {
+                if ($request.HttpMethod -eq 'GET') {
+                    Send-WebJson -Response $response -StatusCode 200 -Value @{ branding = $script:AuthRecord.Branding }
+                    continue
+                }
+                if ($request.HttpMethod -eq 'PUT') {
+                    $body = Read-WebRequestJson -Request $request
+                    if (-not $body.Contains('Branding') -or $body.Branding -isnot [System.Collections.IDictionary]) {
+                        throw [ArgumentException]::new('Branding must be a JSON object.')
+                    }
+                    $nextStore = $script:AuthRecord | ConvertTo-Json -Depth 8 | ConvertFrom-Json -AsHashtable
+                    $nextStore.Branding = Set-MigrationWebBranding -Branding $nextStore.Branding -Updates $body.Branding
+                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath -PortableMode:$script:PortableMode
+                    $script:AuthRecord = $nextStore
+                    Write-WebAuditRecord -Action 'Application branding updated' -Actor $session.Username -Outcome 'Succeeded' -Details @{
+                        ProductName = [string]$nextStore.Branding.ProductName
+                        Theme = [string]$nextStore.Branding.Theme
+                    }
+                    Send-WebJson -Response $response -StatusCode 200 -Value @{ branding = $nextStore.Branding }
+                    continue
+                }
+                Send-WebJson -Response $response -StatusCode 405 -Value @{ error = 'Method not allowed.' }
                 continue
             }
             if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/defaults') {

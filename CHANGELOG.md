@@ -5,6 +5,8 @@ follow semantic versioning.
 
 ## Unreleased
 
+- Added installation-scoped Super Admin user management, server-enforced workspace grants, and local white-label/theme settings with validated colors and embedded image logos.
+- Migrated existing single-account authentication files to the new user store without changing the existing administrator credentials.
 - Added first-run administrator creation in the browser, protected by a single-use host-console code, loopback-only setup, atomic auth-file creation, and a 14-character minimum password; fresh installs no longer receive a generated login password.
 - Consolidated auth-file persistence with atomic writes and restricted ACLs for standard-mode installations.
 - Documented why browser-based MAC-address registration is not used: browsers cannot reliably obtain a device MAC, and MAC addresses are mutable/spoofable identifiers.

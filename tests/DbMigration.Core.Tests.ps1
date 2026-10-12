@@ -31,6 +31,67 @@ Describe 'Migration web authentication' {
         Test-MigrationWebWindowsGroupMembership -Identity $identity -Group 'S-1-1-0' | Should -BeTrue
         Test-MigrationWebWindowsGroupMembership -Identity $identity -Group 'S-1-0-0' | Should -BeFalse
     }
+
+    It 'migrates a legacy credential record into one installation Super Admin' {
+        $password = ConvertTo-SecureString 'test-password-1234' -AsPlainText -Force
+        try {
+            $legacyRecord = New-MigrationWebPasswordRecord -Username 'legacy-admin' -Password $password
+
+            $store = ConvertTo-MigrationWebAuthStore -Record ([ordered]@{
+                Username = $legacyRecord.Username
+                Salt = $legacyRecord.Salt
+                PasswordHash = $legacyRecord.PasswordHash
+                Iterations = $legacyRecord.Iterations
+                CreatedUtc = $legacyRecord.CreatedUtc
+            })
+
+            $store.SchemaVersion | Should -Be 2
+            $store.Users.Count | Should -Be 1
+            $store.Users[0].Role | Should -Be 'SuperAdmin'
+            $store.Users[0].Features | Should -Contain 'Migration'
+            Test-MigrationWebPassword -Record $store.Users[0] -Username 'legacy-admin' -Password 'test-password-1234' |
+                Should -BeTrue
+        }
+        finally {
+            $password.Dispose()
+        }
+    }
+
+    It 'creates scoped users and excludes credential material from safe user data' {
+        $password = ConvertTo-SecureString 'user-password-12345' -AsPlainText -Force
+        try {
+            $user = New-MigrationWebUserRecord -Username 'operator' -Password $password -Features @('Patching', 'LogsAudit')
+            $safeUser = Get-MigrationWebSafeUser -User $user
+
+            $user.Role | Should -Be 'User'
+            $user.Features | Should -Contain 'Patching'
+            $safeUser.Keys | Should -Not -Contain 'Salt'
+            $safeUser.Keys | Should -Not -Contain 'PasswordHash'
+            { New-MigrationWebUserRecord -Username 'operator2' -Password $password -Features @('SuperAdmin') } |
+                Should -Throw '*Unsupported feature grants*'
+        }
+        finally {
+            $password.Dispose()
+        }
+    }
+
+    It 'validates themes, colors, and branding values before storing them' {
+        $branding = Get-MigrationWebDefaultBranding
+
+        $updated = Set-MigrationWebBranding -Branding $branding -Updates @{
+            Theme = 'Dark'
+            AccentColor = '#123abc'
+            ProductName = 'Client Migration'
+        }
+
+        $updated.Theme | Should -Be 'Dark'
+        $updated.AccentColor | Should -Be '#123abc'
+        $updated.ProductName | Should -Be 'Client Migration'
+        { Set-MigrationWebBranding -Branding $branding -Updates @{ Theme = 'Solarized' } } |
+            Should -Throw '*Theme must be Light, Dark, or Blue*'
+        { Set-MigrationWebBranding -Branding $branding -Updates @{ AccentColor = 'red' } } |
+            Should -Throw '*six-digit CSS hex color*'
+    }
 }
 
 Describe 'Portable web storage paths' {
