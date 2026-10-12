@@ -3,6 +3,53 @@ BeforeAll {
 }
 
 Describe 'Migration reporting data' {
+    It 'clears host, run, and audit logs while preserving generated reports' {
+        $logs = Join-Path $TestDrive 'reset-logs'
+        $reports = Join-Path $TestDrive 'reset-reports'
+        $null = New-Item -ItemType Directory -Path $logs, $reports -Force
+        foreach ($name in @(
+            'WebHost-20260101.log', 'Migration-run1.jsonl', 'Patch-run2.jsonl',
+            'Audit.jsonl', 'Audit.key', 'Audit.jsonl.head'
+        )) {
+            Set-Content -LiteralPath (Join-Path $logs $name) -Value 'test'
+        }
+        $reportPath = Join-Path $reports 'Migration-report.csv'
+        Set-Content -LiteralPath $reportPath -Value 'report'
+
+        $deletedCount = Clear-MigrationWebLogs -LogDirectory $logs
+
+        $deletedCount | Should -Be 6
+        @(Get-ChildItem -LiteralPath $logs -File).Count | Should -Be 0
+        Test-Path -LiteralPath $reportPath | Should -BeTrue
+    }
+
+    It 'returns zero when the log directory does not exist' {
+        Clear-MigrationWebLogs -LogDirectory (Join-Path $TestDrive 'no-log-directory') |
+            Should -Be 0
+    }
+
+    It 'starts a verifiable audit chain with the reset event after clearing' {
+        $logs = Join-Path $TestDrive 'audit-reset'
+        $null = New-Item -ItemType Directory -Path $logs -Force
+        $auditPath = Join-Path $logs 'Audit.jsonl'
+        $keyPath = Join-Path $logs 'Audit.key'
+        $headPath = Join-Path $logs 'Audit.jsonl.head'
+        $null = Add-MigrationAuditRecord -Path $auditPath -KeyPath $keyPath -HeadPath $headPath -Record @{
+            Action = 'Old event'
+        }
+
+        Clear-MigrationWebLogs -LogDirectory $logs | Should -Be 3
+        $null = Add-MigrationAuditRecord -Path $auditPath -KeyPath $keyPath -HeadPath $headPath -Record @{
+            Action = 'Administrator cleared application logs and audit trail'
+        }
+        $audit = Get-MigrationAuditLog -Path $auditPath -KeyPath $keyPath -HeadPath $headPath -Limit 10
+
+        $audit.Integrity.Status | Should -Be 'Verified'
+        $audit.Integrity.VerifiedEntries | Should -Be 1
+        $audit.Records.Count | Should -Be 1
+        $audit.Records[0].Action | Should -Be 'Administrator cleared application logs and audit trail'
+    }
+
     It 'writes and reads structured JSONL records' {
         $path = Join-Path $TestDrive 'logs\Audit.jsonl'
 

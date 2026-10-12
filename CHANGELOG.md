@@ -5,10 +5,14 @@ follow semantic versioning.
 
 ## Unreleased
 
+- Added first-run administrator creation in the browser, protected by a single-use host-console code, loopback-only setup, atomic auth-file creation, and a 14-character minimum password; fresh installs no longer receive a generated login password.
+- Consolidated auth-file persistence with atomic writes and restricted ACLs for standard-mode installations.
+- Documented why browser-based MAC-address registration is not used: browsers cannot reliably obtain a device MAC, and MAC addresses are mutable/spoofable identifiers.
 - Added a business-oriented audit trail with structured events, failed-login and operation-request outcomes, DPAPI-protected HMAC chaining, a signed head checkpoint, integrity warnings, server-side filters, and audit-only JSON/CSV export.
 - Added an original responsive SQL Server illustration to the sign-in page; it is bundled inline and works without an external image service.
 - Reset transient logs, inline errors, and open dialogs when an application session ends or a user signs back in, while preserving saved server history and silently restoring live job state.
 - Added consistent status colors for migration and patch progress, outcomes, metrics, and reporting tables.
+- Clarified linked-server migration as a single opt-in and visually highlighted selected migration options for faster review.
 - Moved the Logs & audit workspace out of the default landing view; open it from navigation when needed.
 - Replaced browser-native migration errors and confirmations with accessible in-app dialogs styled to match the application.
 - Added an optional sign-in preference to remember the username on this device; passwords and authentication sessions are not stored.
@@ -18,6 +22,8 @@ follow semantic versioning.
 - Only one web host can run per machine; launching a second one is refused with a clear message.
 - The launcher now asks for administrator rights (UAC) so SQL Server patching of local instances works; if the host is not elevated, patching a local instance fails fast with an explanatory message instead of "Console not elevated".
 - Added sequential custom T-SQL execution for arbitrary independent SQL instances, with per-instance result and failure reporting.
+- Added browser-side custom T-SQL output downloads for one, selected, or all SQL instances in CSV, JSON, TSV, or XML, with spreadsheet-formula protection for CSV/TSV.
+- Added a readiness-only, DMA-inspired SQL Server assessment for selected databases, with compatibility, feature, TDE, capacity, security, and legacy-module checks plus downloadable HTML/CSV/JSON reports; documents that it is not an exhaustive Microsoft DMA replacement.
 - Added a graphical disk-usage workspace for one or more SQL Server hosts, with per-volume capacity bars and per-server error reporting.
 - Added a separate live SQL Server monitor for up to 10 independent instances, with transient CPU/RAM/disk graphs, request details, and performance threshold alerts; active migration endpoints are monitored automatically without persisting snapshots.
 - Expanded the live migration monitor with a stage progress gauge, current database and pair, an overall job percentage, and completed/skipped/in-progress/pending/failed counts.

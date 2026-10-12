@@ -12,7 +12,6 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.WebAuth.psm1') -Force
 
 $storage = Resolve-MigrationWebStoragePaths -AppRoot $AppRoot -PortableMode:$PortableMode
-$directory = $storage.AuthDirectory
 $fullPath = $storage.AuthPath
 
 if (-not $PortableMode) {
@@ -55,54 +54,6 @@ finally {
     $confirmation.Dispose()
 }
 
-$null = New-Item -ItemType Directory -Path $directory -Force
-
-if (-not $PortableMode) {
-    $allowedIdentities = @(
-        ([System.Security.Principal.NTAccount]::new($RunAsAccount).Translate([System.Security.Principal.SecurityIdentifier]))
-        ([System.Security.Principal.SecurityIdentifier]::new([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null))
-        ([System.Security.Principal.SecurityIdentifier]::new([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null))
-    )
-    $directoryItem = Get-Item -LiteralPath $directory -Force
-    if ($directoryItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-        throw "Authentication directory must not be a reparse point: $directory"
-    }
-    $directoryAcl = Get-Acl -LiteralPath $directory
-    $directoryAcl.SetAccessRuleProtection($true, $false)
-    foreach ($existingRule in @($directoryAcl.Access)) {
-        $directoryAcl.RemoveAccessRuleSpecific($existingRule)
-    }
-    foreach ($identity in $allowedIdentities) {
-        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-            $identity, 'FullControl', 'Allow'
-        )
-        $directoryAcl.AddAccessRule($rule)
-    }
-    Set-Acl -LiteralPath $directory -AclObject $directoryAcl
-}
-
-if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-    $null = New-Item -ItemType File -Path $fullPath -Force
-}
-
-if (-not $PortableMode) {
-    $authItem = Get-Item -LiteralPath $fullPath -Force
-    if ($authItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-        throw "Authentication file must not be a reparse point: $fullPath"
-    }
-    $authAcl = Get-Acl -LiteralPath $fullPath
-    $authAcl.SetAccessRuleProtection($true, $false)
-    foreach ($existingRule in @($authAcl.Access)) {
-        $authAcl.RemoveAccessRuleSpecific($existingRule)
-    }
-    foreach ($identity in $allowedIdentities) {
-        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-            $identity, 'FullControl', 'Allow'
-        )
-        $authAcl.AddAccessRule($rule)
-    }
-    Set-Acl -LiteralPath $fullPath -AclObject $authAcl
-}
-$record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fullPath -Encoding utf8
+Save-MigrationWebAuthRecord -Record $record -Path $fullPath -PortableMode:$PortableMode
 
 Write-Output "Authentication record created at $fullPath. Password material is stored only as a salted PBKDF2 hash."

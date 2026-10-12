@@ -486,4 +486,419 @@ function Test-MigrationConfiguration {
     }
 }
 
-Export-ModuleMember -Function Get-MigrationDiscovery, Get-MigrationServerObjectCounts, Test-MigrationRestoreCapacity, Test-MigrationTdeReadiness, Test-MigrationConfiguration
+function Get-MigrationReadinessAssessment {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string] $Source,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string] $Target,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string[]] $Databases,
+
+        [Parameter()]
+        [ValidateSet('Full', 'SchemaOnly')]
+        [string] $MigrationMode = 'Full',
+
+        [Parameter()]
+        [ValidateRange(0, 100)]
+        [double] $BufferPercent = 20
+    )
+
+    if (-not (Get-Module -Name dbatools)) {
+        try {
+            Import-Module dbatools -ErrorAction Stop
+        }
+        catch {
+            throw "The dbatools module is required. Install it with Install-Module dbatools. $($_.Exception.Message)"
+        }
+    }
+
+    $sourceConnection = $null
+    $targetConnection = $null
+    $sourceConnectionError = $null
+    $targetConnectionError = $null
+    try { $sourceConnection = Connect-DbaInstance -SqlInstance $Source -ErrorAction Stop }
+    catch { $sourceConnectionError = $_.Exception.Message }
+    try { $targetConnection = Connect-DbaInstance -SqlInstance $Target -ErrorAction Stop }
+    catch { $targetConnectionError = $_.Exception.Message }
+
+    $sourceMajor = if ($sourceConnection) { [int]$sourceConnection.VersionMajor } else { $null }
+    $targetMajor = if ($targetConnection) { [int]$targetConnection.VersionMajor } else { $null }
+    $targetFullTextInstalled = $null
+    $targetFilestreamConfigured = $null
+    if ($targetConnection) {
+        try {
+            $serverFeatures = @(Invoke-DbaQuery -SqlInstance $Target -Database master -EnableException -ErrorAction Stop -Query @'
+SELECT
+    CONVERT(bit, SERVERPROPERTY('IsFullTextInstalled')) AS IsFullTextInstalled,
+    CONVERT(int, SERVERPROPERTY('FilestreamConfiguredLevel')) AS FilestreamConfiguredLevel;
+'@)
+            if ($serverFeatures.Count -eq 1) {
+                $targetFullTextInstalled = [bool]$serverFeatures[0].IsFullTextInstalled
+                $targetFilestreamConfigured = [int]$serverFeatures[0].FilestreamConfiguredLevel
+            }
+        }
+        catch {
+            $targetFullTextInstalled = $null
+            $targetFilestreamConfigured = $null
+        }
+    }
+
+    foreach ($database in $Databases) {
+        $findings = [System.Collections.Generic.List[object]]::new()
+        $addFinding = {
+            param(
+                [string] $Category,
+                [string] $Severity,
+                [string] $Check,
+                [string] $Status,
+                [string] $Details,
+                [string] $Recommendation
+            )
+            $findings.Add([pscustomobject]@{
+                Category = $Category
+                Severity = $Severity
+                Check = $Check
+                Status = $Status
+                Details = $Details
+                Recommendation = $Recommendation
+            })
+        }
+
+        if ($sourceConnectionError) {
+            & $addFinding 'Connectivity' 'Critical' 'Connect to source' 'Failed' `
+                "Could not connect to source '$Source': $sourceConnectionError" `
+                'Resolve source SQL connectivity and permissions, then rerun the assessment.'
+        }
+        if ($targetConnectionError) {
+            & $addFinding 'Connectivity' 'Critical' 'Connect to target' 'Failed' `
+                "Could not connect to target '$Target': $targetConnectionError" `
+                'Resolve target SQL connectivity and permissions, then rerun the assessment.'
+        }
+        if ($sourceConnectionError -or $targetConnectionError) {
+            [pscustomobject]@{
+                Source = $Source
+                Target = $Target
+                Database = $database
+                SourceVersionMajor = $sourceMajor
+                TargetVersionMajor = $targetMajor
+                AssessedAt = [DateTime]::UtcNow.ToString('o')
+                Readiness = 'Blocked'
+                Findings = $findings.ToArray()
+            }
+            continue
+        }
+
+        if ($sourceMajor -lt 11 -or $sourceMajor -gt 17) {
+            & $addFinding 'Platform compatibility' 'Critical' 'Source SQL Server version' 'Failed' `
+                "Source major version $sourceMajor is outside the supported range 11-17." `
+                'Use a supported source SQL Server version or a separately validated migration path.'
+        }
+        else {
+            & $addFinding 'Platform compatibility' 'Information' 'Source SQL Server version' 'Passed' `
+                "Source SQL Server major version: $sourceMajor." 'Confirm the exact edition and servicing level required by your change policy.'
+        }
+        if ($targetMajor -lt 11 -or $targetMajor -gt 17) {
+            & $addFinding 'Platform compatibility' 'Critical' 'Target SQL Server version' 'Failed' `
+                "Target major version $targetMajor is outside the supported range 11-17." `
+                'Use a supported target SQL Server version or a separately validated migration path.'
+        }
+        elseif ($targetMajor -lt $sourceMajor) {
+            & $addFinding 'Platform compatibility' 'Critical' 'Target is older than source' 'Failed' `
+                "Target SQL Server major version $targetMajor is older than source version $sourceMajor." `
+                'Choose a target at the same or a newer SQL Server version, or design a tested downgrade/export-import.'
+        }
+        else {
+            & $addFinding 'Platform compatibility' 'Information' 'Target SQL Server version' 'Passed' `
+                "Target SQL Server major version $targetMajor is the same as or newer than source version $sourceMajor." `
+                'Verify feature, edition, and application compatibility for this target release.'
+        }
+
+        $escapedDatabase = $database.Replace("'", "''")
+        try {
+            $databaseMetadata = @(Invoke-DbaQuery -SqlInstance $Source -Database master -EnableException -ErrorAction Stop -Query @"
+SELECT
+    d.name AS DatabaseName,
+    d.state_desc AS State,
+    d.compatibility_level AS CompatibilityLevel,
+    d.recovery_model_desc AS RecoveryModel,
+    d.is_encrypted AS IsEncrypted,
+    d.is_cdc_enabled AS IsCdcEnabled,
+    d.is_published AS IsPublished,
+    d.is_subscribed AS IsSubscribed,
+    d.is_broker_enabled AS IsBrokerEnabled,
+    d.is_trustworthy_on AS IsTrustworthyOn,
+    d.is_db_chaining_on AS IsDbChainingOn
+FROM sys.databases AS d
+WHERE d.name = N'$escapedDatabase';
+"@)
+            if ($databaseMetadata.Count -ne 1) {
+                & $addFinding 'Database inventory' 'Critical' 'Source database exists' 'Failed' `
+                    "Database '$database' was not found on source '$Source'." `
+                    'Refresh discovery and select a database that exists on the source.'
+                [pscustomobject]@{
+                    Source = $Source
+                    Target = $Target
+                    Database = $database
+                    SourceVersionMajor = $sourceMajor
+                    TargetVersionMajor = $targetMajor
+                    AssessedAt = [DateTime]::UtcNow.ToString('o')
+                    Readiness = 'Blocked'
+                    Findings = $findings.ToArray()
+                }
+                continue
+            }
+        }
+        catch {
+            & $addFinding 'Database inventory' 'Critical' 'Read source database metadata' 'Failed' `
+                "Could not read database '$database' metadata: $($_.Exception.Message)" `
+                'Grant the assessment identity permission to view the source database metadata, then rerun.'
+            [pscustomobject]@{
+                Source = $Source
+                Target = $Target
+                Database = $database
+                SourceVersionMajor = $sourceMajor
+                TargetVersionMajor = $targetMajor
+                AssessedAt = [DateTime]::UtcNow.ToString('o')
+                Readiness = 'Blocked'
+                Findings = $findings.ToArray()
+            }
+            continue
+        }
+
+        $metadata = $databaseMetadata[0]
+        if ($metadata.State -ne 'ONLINE') {
+            & $addFinding 'Database state' 'Critical' 'Source database online' 'Failed' `
+                "Source database state is '$($metadata.State)'." `
+                'Bring the source database online and rerun the assessment.'
+        }
+        else {
+            & $addFinding 'Database state' 'Information' 'Source database online' 'Passed' `
+                'Source database is online.' 'No action required.'
+        }
+
+        $compatibilityLevel = [int]$metadata.CompatibilityLevel
+        if ($compatibilityLevel -gt ($targetMajor * 10)) {
+            & $addFinding 'Platform compatibility' 'Critical' 'Database compatibility level' 'Failed' `
+                "Source database compatibility level $compatibilityLevel is higher than the target engine's maximum supported level $($targetMajor * 10)." `
+                'Upgrade the target SQL Server version or lower the source database compatibility level only after application testing.'
+        }
+        else {
+            & $addFinding 'Platform compatibility' 'Information' 'Database compatibility level' 'Passed' `
+                "Source database compatibility level is $compatibilityLevel; target engine maximum is $($targetMajor * 10)." `
+                'The restored database generally retains its current compatibility level; plan any compatibility-level change separately and test it.'
+        }
+
+        try {
+            $targetDatabase = @(Invoke-DbaQuery -SqlInstance $Target -Database master -EnableException -ErrorAction Stop -Query @"
+SELECT name, state_desc AS State
+FROM sys.databases
+WHERE name = N'$escapedDatabase';
+"@)
+            if ($targetDatabase.Count -gt 0) {
+                & $addFinding 'Target state' 'Warning' 'Target database name already exists' 'Review' `
+                    "A database named '$database' already exists on target '$Target' (state: $($targetDatabase[0].State)). Assessment is read-only and will not change or replace it." `
+                    'Confirm ownership and take a recoverable backup. The migration must explicitly authorize any database replacement.'
+            }
+            else {
+                & $addFinding 'Target state' 'Information' 'Target database name available' 'Passed' `
+                    "No database named '$database' currently exists on target '$Target'." 'No action required.'
+            }
+        }
+        catch {
+            & $addFinding 'Target state' 'Warning' 'Check target database name' 'Not verified' `
+                "Could not verify whether '$database' exists on target: $($_.Exception.Message)" `
+                'Grant permission to view target database metadata and rerun; do not assume the name is available.'
+        }
+
+        try {
+            $featureQuery = if ($sourceMajor -ge 12) {
+                @'
+SELECT
+    (SELECT COUNT(*) FROM sys.fulltext_catalogs) AS FullTextCatalogCount,
+    (SELECT COUNT(*) FROM sys.tables WHERE is_memory_optimized = 1) AS MemoryOptimizedTableCount,
+    (SELECT COUNT(*) FROM sys.database_files WHERE type = 2) AS FileStreamFileCount,
+    (SELECT COUNT(*) FROM sys.tables WHERE is_filetable = 1) AS FileTableCount;
+'@
+            }
+            else {
+                @'
+SELECT
+    (SELECT COUNT(*) FROM sys.fulltext_catalogs) AS FullTextCatalogCount,
+    0 AS MemoryOptimizedTableCount,
+    (SELECT COUNT(*) FROM sys.database_files WHERE type = 2) AS FileStreamFileCount,
+    (SELECT COUNT(*) FROM sys.tables WHERE is_filetable = 1) AS FileTableCount;
+'@
+            }
+            $features = @(Invoke-DbaQuery -SqlInstance $Source -Database $database -EnableException -ErrorAction Stop -Query $featureQuery)
+            if ($features.Count -ne 1) { throw 'Feature inventory query returned no result.' }
+            $feature = $features[0]
+
+            if ([int]$feature.FullTextCatalogCount -gt 0 -and $targetFullTextInstalled -eq $false) {
+                & $addFinding 'Feature support' 'Critical' 'Full-Text Search support' 'Failed' `
+                    "Source database has $($feature.FullTextCatalogCount) Full-Text catalog(s), but Full-Text Search is not installed on the target." `
+                    'Install and enable the matching SQL Server Full-Text Search feature on the target before migration.'
+            }
+            elseif ([int]$feature.FullTextCatalogCount -gt 0 -and $null -eq $targetFullTextInstalled) {
+                & $addFinding 'Feature support' 'Warning' 'Full-Text Search support' 'Not verified' `
+                    "Source database has $($feature.FullTextCatalogCount) Full-Text catalog(s), but target Full-Text Search support could not be verified." `
+                    'Verify that Full-Text Search is installed on the target before migration.'
+            }
+            elseif ([int]$feature.FullTextCatalogCount -gt 0) {
+                & $addFinding 'Feature support' 'Information' 'Full-Text Search support' 'Passed' `
+                    "Source database has $($feature.FullTextCatalogCount) Full-Text catalog(s); target reports Full-Text Search installed." `
+                    'Validate full-text indexes and language resources after migration.'
+            }
+
+            if ([int]$feature.FileStreamFileCount -gt 0 -and $null -eq $targetFilestreamConfigured) {
+                & $addFinding 'Feature support' 'Warning' 'FILESTREAM target configuration' 'Not verified' `
+                    "Source database uses $($feature.FileStreamFileCount) FILESTREAM data file(s), but target FILESTREAM configuration could not be verified." `
+                    'Check the target SQL Server FILESTREAM configuration and Windows share access.'
+            }
+            elseif ([int]$feature.FileStreamFileCount -gt 0 -and $targetFilestreamConfigured -eq 0) {
+                & $addFinding 'Feature support' 'Critical' 'FILESTREAM target configuration' 'Failed' `
+                    "Source database uses $($feature.FileStreamFileCount) FILESTREAM data file(s), but FILESTREAM is not configured on the target." `
+                    'Enable and configure FILESTREAM on the target as required by the application.'
+            }
+            elseif ([int]$feature.FileStreamFileCount -gt 0) {
+                & $addFinding 'Feature support' 'Warning' 'FILESTREAM target configuration' 'Review' `
+                    "Source database uses $($feature.FileStreamFileCount) FILESTREAM data file(s)." `
+                    'Verify target FILESTREAM configuration, Windows access, paths, and application behavior.'
+            }
+
+            if ([int]$feature.MemoryOptimizedTableCount -gt 0) {
+                & $addFinding 'Feature support' 'Warning' 'In-Memory OLTP objects' 'Review' `
+                    "Source database contains $($feature.MemoryOptimizedTableCount) memory-optimized table(s)." `
+                    'Verify target edition and In-Memory OLTP capacity, and include memory-optimized objects in application testing.'
+            }
+            if ([int]$feature.FileTableCount -gt 0) {
+                & $addFinding 'Feature support' 'Warning' 'FileTables' 'Review' `
+                    "Source database contains $($feature.FileTableCount) FileTable(s)." `
+                    'Verify FILESTREAM setup, Windows share access, and FileTable application dependencies on the target.'
+            }
+            if ($metadata.IsCdcEnabled -or $metadata.IsPublished -or $metadata.IsSubscribed) {
+                & $addFinding 'Operational dependencies' 'Warning' 'CDC or replication configuration' 'Review' `
+                    "CDC: $($metadata.IsCdcEnabled); published: $($metadata.IsPublished); subscribed: $($metadata.IsSubscribed)." `
+                    'Plan CDC/replication reconfiguration and validate downstream consumers; these server/database relationships may require explicit migration steps.'
+            }
+            if ($metadata.IsBrokerEnabled) {
+                & $addFinding 'Operational dependencies' 'Warning' 'Service Broker' 'Review' `
+                    'Service Broker is enabled on the source database.' `
+                    'Validate broker identifiers, routes, endpoints, security, and dependent services after migration.'
+            }
+            if ($metadata.IsTrustworthyOn -or $metadata.IsDbChainingOn) {
+                & $addFinding 'Security' 'Warning' 'Elevated database trust settings' 'Review' `
+                    "TRUSTWORTHY: $($metadata.IsTrustworthyOn); DB_CHAINING: $($metadata.IsDbChainingOn)." `
+                    'Review whether these settings are required; avoid enabling elevated trust or cross-database ownership chaining without security approval.'
+            }
+        }
+        catch {
+            & $addFinding 'Feature support' 'Warning' 'Read database feature inventory' 'Not verified' `
+                "Could not complete the feature inventory: $($_.Exception.Message)" `
+                'Grant metadata visibility on the source database and rerun; treat unverified features as unresolved.'
+        }
+
+        try {
+            $moduleQuery = @'
+SELECT TOP (200)
+    QUOTENAME(OBJECT_SCHEMA_NAME(m.object_id)) + N'.' + QUOTENAME(OBJECT_NAME(m.object_id)) AS ModuleName,
+    candidate.PatternName
+FROM sys.sql_modules AS m
+CROSS APPLY (VALUES
+    (N'Legacy *= outer-join operator', N'%*=%'),
+    (N'Legacy =* outer-join operator', N'%=*%'),
+    (N'Deprecated sp_dboption procedure', N'%sp_dboption%'),
+    (N'Deprecated DBCC DBREINDEX command', N'%DBCC DBREINDEX%'),
+    (N'Deprecated DBCC SHOWCONTIG command', N'%DBCC SHOWCONTIG%'),
+    (N'Deprecated text data type', N'%text%'),
+    (N'Deprecated ntext data type', N'%ntext%'),
+    (N'Deprecated image data type', N'%image%')
+) AS candidate(PatternName, Pattern)
+WHERE m.definition LIKE candidate.Pattern
+ORDER BY candidate.PatternName, ModuleName;
+'@
+            $moduleCandidates = @(Invoke-DbaQuery -SqlInstance $Source -Database $database -EnableException -ErrorAction Stop -Query $moduleQuery)
+            $moduleCandidates = @($moduleCandidates | Sort-Object PatternName, ModuleName -Unique)
+            foreach ($candidate in $moduleCandidates) {
+                & $addFinding 'Code compatibility' 'Warning' ([string]$candidate.PatternName) 'Candidate reference' `
+                    "A static text scan found a possible reference in module '$($candidate.ModuleName)'. This may be a false positive (for example, comments or string literals)." `
+                    'Review the module definition and runtime usage manually; this lexical scan does not parse or execute T-SQL.'
+            }
+            if ($moduleCandidates.Count -eq 0) {
+                & $addFinding 'Code compatibility' 'Information' 'Known legacy syntax scan' 'No candidate references found' `
+                    'No matches were found for the limited set of known legacy syntax patterns scanned.' `
+                    'This limited scan is not exhaustive and does not establish application compatibility.'
+            }
+        }
+        catch {
+            & $addFinding 'Code compatibility' 'Warning' 'Known legacy syntax scan' 'Not verified' `
+                "Could not scan stored module definitions: $($_.Exception.Message)" `
+                'Grant VIEW DEFINITION on the database and rerun; review application and dynamic SQL separately.'
+        }
+
+        if ([bool]$metadata.IsEncrypted) {
+            $tdeReadiness = Test-MigrationTdeReadiness -Source $Source -Target $Target -Database $database -MigrationMode $MigrationMode
+            $tdeSeverity = if ($tdeReadiness.Status -eq 'Passed') { 'Information' } else { 'Critical' }
+            & $addFinding 'Encryption' $tdeSeverity 'Transparent Data Encryption' $tdeReadiness.Status `
+                $tdeReadiness.Message `
+                'Back up and securely transfer the TDE certificate or asymmetric key and private key; verify it on the target before restoring.'
+        }
+        else {
+            & $addFinding 'Encryption' 'Information' 'Transparent Data Encryption' 'Not enabled' `
+                'Source database is not encrypted with TDE.' 'No TDE key transfer is required.'
+        }
+
+        if ($MigrationMode -eq 'SchemaOnly') {
+            & $addFinding 'Capacity' 'Information' 'Target restore capacity' 'Not required' `
+                'Schema-only migration does not restore database data or log files.' `
+                'Confirm the target has appropriate space for schema objects and application growth.'
+        }
+        else {
+            try {
+                $capacity = Test-MigrationRestoreCapacity -Source $Source -Target $Target -Database $database -BufferPercent $BufferPercent
+                if ($capacity.Status -eq 'Failed') {
+                    & $addFinding 'Capacity' 'Critical' 'Target restore capacity' 'Failed' `
+                        ([string]$capacity.Message) `
+                        'Free target data and log volume space or adjust the target file layout, then rerun the assessment.'
+                }
+                else {
+                    & $addFinding 'Capacity' 'Information' 'Target restore capacity' 'Passed' `
+                        ([string]$capacity.Message) 'Recheck capacity immediately before migration; this estimate can change.'
+                }
+            }
+            catch {
+                & $addFinding 'Capacity' 'Warning' 'Target restore capacity' 'Not verified' `
+                    "Could not verify target restore capacity: $($_.Exception.Message)" `
+                    'Check target data/log file paths and available disk space, then rerun; capacity was not assumed to be sufficient.'
+            }
+        }
+
+        $readiness = if (@($findings | Where-Object Severity -eq 'Critical').Count -gt 0) {
+            'Blocked'
+        }
+        elseif (@($findings | Where-Object Severity -eq 'Warning').Count -gt 0) {
+            'Review required'
+        }
+        else {
+            'No blockers detected'
+        }
+        [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Database = $database
+            SourceVersionMajor = $sourceMajor
+            TargetVersionMajor = $targetMajor
+            AssessedAt = [DateTime]::UtcNow.ToString('o')
+            Readiness = $readiness
+            Findings = $findings.ToArray()
+        }
+    }
+}
+
+Export-ModuleMember -Function Get-MigrationDiscovery, Get-MigrationServerObjectCounts, Test-MigrationRestoreCapacity, Test-MigrationTdeReadiness, Test-MigrationConfiguration, Get-MigrationReadinessAssessment

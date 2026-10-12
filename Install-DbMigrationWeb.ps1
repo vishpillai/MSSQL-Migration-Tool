@@ -142,4 +142,4 @@ if (-not $NoStartMenuShortcut) {
     New-DesktopShortcut -Path $startMenuShortcutPath -Target $launcherPath -WorkingDirectory $resolvedInstallPath
 }
 
-Write-Host "Installed Db Migration Tool.`nLocation: $resolvedInstallPath`nLaunch with: $launcherPath`nA unique initial login is generated on first launch."
+Write-Host "Installed Db Migration Tool.`nLocation: $resolvedInstallPath`nLaunch with: $launcherPath`nCreate the first administrator in the browser setup screen; enter the one-time code shown by the host."

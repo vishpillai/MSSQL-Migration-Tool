@@ -10,8 +10,8 @@ function New-MigrationWebPasswordRecord {
     if ([string]::IsNullOrWhiteSpace($Username) -or $Username.Length -gt 128) {
         throw 'Username must contain between 1 and 128 characters.'
     }
-    if ($Password.Length -lt 14) {
-        throw 'The application password must contain at least 14 characters.'
+    if ($Password.Length -lt 14 -or $Password.Length -gt 1024) {
+        throw 'The application password must contain between 14 and 1024 characters.'
     }
 
     $passwordPointer = [IntPtr]::Zero
@@ -89,6 +89,83 @@ function Test-MigrationWebPassword {
     return ($passwordMatches -and $usernameMatches)
 }
 
+function Save-MigrationWebAuthRecord {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateNotNull()][object] $Record,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Path,
+        [Parameter()][switch] $PortableMode,
+        [Parameter()][switch] $CreateOnly
+    )
+
+    $directory = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+        $null = New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop
+    }
+    $directoryItem = Get-Item -LiteralPath $directory -Force -ErrorAction Stop
+    if ($directoryItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Authentication directory must not be a reparse point: $directory"
+    }
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        $authItem = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if ($authItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "Authentication file must not be a reparse point: $Path"
+        }
+    }
+    elseif (Test-Path -LiteralPath $Path) {
+        throw "Authentication path is not a file: $Path"
+    }
+
+    if (-not $PortableMode) {
+        $allowedIdentities = @(
+            [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+            ([System.Security.Principal.SecurityIdentifier]::new([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null))
+            ([System.Security.Principal.SecurityIdentifier]::new([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null))
+        )
+        $directoryAcl = Get-Acl -LiteralPath $directory -ErrorAction Stop
+        $directoryAcl.SetAccessRuleProtection($true, $false)
+        foreach ($existingRule in @($directoryAcl.Access)) {
+            $directoryAcl.RemoveAccessRuleSpecific($existingRule)
+        }
+        foreach ($identity in $allowedIdentities) {
+            $directoryAcl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+                $identity, 'FullControl', 'Allow'
+            ))
+        }
+        Set-Acl -LiteralPath $directory -AclObject $directoryAcl -ErrorAction Stop
+    }
+
+    $temporaryPath = Join-Path $directory ".$([IO.Path]::GetFileName($Path)).$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        $json = ConvertTo-Json -InputObject $Record -Depth 4 -ErrorAction Stop
+        [IO.File]::WriteAllText($temporaryPath, $json, [Text.UTF8Encoding]::new($false))
+        if (-not $PortableMode) {
+            $fileAcl = Get-Acl -LiteralPath $temporaryPath -ErrorAction Stop
+            $fileAcl.SetAccessRuleProtection($true, $false)
+            foreach ($existingRule in @($fileAcl.Access)) {
+                $fileAcl.RemoveAccessRuleSpecific($existingRule)
+            }
+            foreach ($identity in $allowedIdentities) {
+                $fileAcl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+                    $identity, 'FullControl', 'Allow'
+                ))
+            }
+            Set-Acl -LiteralPath $temporaryPath -AclObject $fileAcl -ErrorAction Stop
+        }
+        if ($CreateOnly) {
+            [IO.File]::Move($temporaryPath, $Path)
+        }
+        else {
+            [IO.File]::Move($temporaryPath, $Path, $true)
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
+            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction Stop
+        }
+    }
+}
+
 function Test-MigrationWebWindowsGroupMembership {
     [CmdletBinding()]
     param(
@@ -144,4 +221,4 @@ function Resolve-MigrationWebStoragePaths {
     }
 }
 
-Export-ModuleMember -Function New-MigrationWebPasswordRecord, Test-MigrationWebPassword, Test-MigrationWebWindowsGroupMembership, Resolve-MigrationWebStoragePaths
+Export-ModuleMember -Function New-MigrationWebPasswordRecord, Test-MigrationWebPassword, Save-MigrationWebAuthRecord, Test-MigrationWebWindowsGroupMembership, Resolve-MigrationWebStoragePaths

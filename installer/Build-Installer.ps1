@@ -65,9 +65,7 @@ $runtimeLauncherPath = Join-Path $stagingRoot 'Start-DbMigrationWeb.ps1'
 [CmdletBinding()]
 param(
     [Parameter()][string] $HostName = 'localhost',
-    [Parameter()][ValidateRange(1, 65535)][int] $Port = 9080,
-    [Parameter()][string] $Username = 'migration-admin',
-    [Parameter()][string] $Password
+    [Parameter()][ValidateRange(1, 65535)][int] $Port = 9080
 )
 
 Set-StrictMode -Version Latest
@@ -83,7 +81,7 @@ if (-not (Get-Module -ListAvailable -Name dbatools)) {
 
 $appRoot = Join-Path $PSScriptRoot 'App'
 & (Join-Path $appRoot 'Start-PortableDbMigrationWeb.ps1') `
-    -HostName $HostName -Port $Port -Username $Username -Password $Password -AppRoot $appRoot
+    -HostName $HostName -Port $Port -AppRoot $appRoot
 '@ | Set-Content -LiteralPath $runtimeLauncherPath -Encoding UTF8
 
 $null = New-Item -ItemType Directory -Path (Join-Path $appRoot 'portable\auth') -Force -ErrorAction Stop

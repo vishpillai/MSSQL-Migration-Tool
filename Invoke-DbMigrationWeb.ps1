@@ -30,7 +30,6 @@ $fullConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
 $fullAuthPath = $storage.AuthPath
 $fullStatePath = [System.IO.Path]::GetFullPath($StatePath)
 $requiredPaths = @($fullConfigPath)
-if ($AuthenticationMode -eq 'Application') { $requiredPaths += $fullAuthPath }
 foreach ($path in $requiredPaths) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required file not found: $path"
@@ -47,12 +46,21 @@ $script:WebConfiguration = Import-MigrationConfiguration -Path $fullConfigPath
 $script:AuthenticationMode = $AuthenticationMode
 $script:WindowsAuthGroup = $WindowsAuthGroup
 $script:AuthRecord = $null
+$script:SetupToken = $null
 if ($script:AuthenticationMode -eq 'Application') {
-    $script:AuthRecord = Get-Content -LiteralPath $fullAuthPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
-    foreach ($property in @('Salt', 'PasswordHash', 'Iterations', 'Username')) {
-        if (-not $script:AuthRecord.Contains($property)) {
-            throw "Authentication record is missing '$property'. Re-run Initialize-DbMigrationWebAuth.ps1."
+    if (Test-Path -LiteralPath $fullAuthPath -PathType Leaf) {
+        $script:AuthRecord = Get-Content -LiteralPath $fullAuthPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
+        foreach ($property in @('Salt', 'PasswordHash', 'Iterations', 'Username')) {
+            if (-not $script:AuthRecord.Contains($property)) {
+                throw "Authentication record is missing '$property'. Re-run Initialize-DbMigrationWebAuth.ps1."
+            }
         }
+    }
+    else {
+        $setupBytes = [byte[]]::new(32)
+        [Security.Cryptography.RandomNumberGenerator]::Fill($setupBytes)
+        $script:SetupToken = [Convert]::ToBase64String($setupBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        [Array]::Clear($setupBytes, 0, $setupBytes.Length)
     }
 }
 
@@ -137,6 +145,8 @@ if ($script:AuthenticationMode -eq 'Windows') {
 $script:Listener.Prefixes.Add("$($script:Origin)/")
 $script:Sessions = @{}
 $script:LoginAttempts = @{}
+$script:SetupAttempts = @{}
+$script:AdminReauthAttempts = @{}
 $script:DiscoveryByPair = @{}
 $script:MigrationProcess = $null
 $script:PatchProcess = $null
@@ -1186,6 +1196,9 @@ if (-not $script:HasInstanceLock) {
 
 $script:Listener.Start()
 Write-Output "Database migration browser UI: $($script:Origin)/"
+if ($script:SetupToken) {
+    Write-Output "First-run administrator setup code (enter in a browser on this computer): $($script:SetupToken)"
+}
 Write-Output "Web host log: $($script:HostLogPath)"
 Write-Output 'Use Ctrl+C to stop the web host. Do not stop the host while a migration is running.'
 Write-WebHostLog -Level Information -Message "Web host started at $($script:Origin)."
@@ -1254,6 +1267,7 @@ try {
                     authenticated = [bool]$session
                     username = if ($session) { $session.Username } else { '' }
                     authMode = $script:AuthenticationMode
+                    setupRequired = $script:AuthenticationMode -eq 'Application' -and $null -eq $script:AuthRecord
                 }
                 continue
             }
@@ -1261,9 +1275,105 @@ try {
                 Send-WebJson -Response $response -StatusCode 403 -Value @{ error = 'Request origin is not allowed.' }
                 continue
             }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/setup') {
+                if ($script:AuthenticationMode -ne 'Application' -or
+                    $null -ne $script:AuthRecord -or
+                    [string]::IsNullOrEmpty($script:SetupToken) -or
+                    (Test-Path -LiteralPath $fullAuthPath -PathType Leaf)) {
+                    Send-WebJson -Response $response -StatusCode 409 -Value @{ error = 'First-run setup has already been completed or is unavailable.' }
+                    continue
+                }
+                $remoteAddress = $request.RemoteEndPoint.Address
+                $localAddress = $request.LocalEndPoint.Address
+                $sameHostAddress = $remoteAddress.Equals($localAddress) -or
+                    ($remoteAddress.IsIPv4MappedToIPv6 -and $remoteAddress.MapToIPv4().Equals($localAddress)) -or
+                    ($localAddress.IsIPv4MappedToIPv6 -and $localAddress.MapToIPv4().Equals($remoteAddress))
+                if (-not [System.Net.IPAddress]::IsLoopback($remoteAddress) -and -not $sameHostAddress) {
+                    Send-WebJson -Response $response -StatusCode 403 -Value @{ error = 'Initial administrator setup must be completed from a browser on the web-host computer.' }
+                    continue
+                }
+                $address = [string]$request.RemoteEndPoint.Address
+                $attempts = @($script:SetupAttempts[$address] | Where-Object { $_ -gt [DateTime]::UtcNow.AddMinutes(-10) })
+                if ($attempts.Count -ge 5) {
+                    $script:SetupAttempts[$address] = $attempts
+                    Send-WebJson -Response $response -StatusCode 429 -Value @{ error = 'Too many setup attempts. Restart the web host and try again.' }
+                    continue
+                }
+                $body = Read-WebRequestJson -Request $request
+                foreach ($property in @('SetupCode', 'Username', 'Password', 'PasswordConfirmation')) {
+                    if (-not $body.Contains($property)) {
+                        throw [ArgumentException]::new("$property is required.")
+                    }
+                }
+                $providedToken = [System.Text.Encoding]::UTF8.GetBytes([string]$body.SetupCode)
+                $expectedToken = [System.Text.Encoding]::UTF8.GetBytes([string]$script:SetupToken)
+                $setupCodeValid = [System.Security.Cryptography.CryptographicOperations]::FixedTimeEquals(
+                    $providedToken, $expectedToken
+                )
+                [Array]::Clear($providedToken, 0, $providedToken.Length)
+                [Array]::Clear($expectedToken, 0, $expectedToken.Length)
+                if (-not $setupCodeValid) {
+                    $attempts += [DateTime]::UtcNow
+                    $script:SetupAttempts[$address] = $attempts
+                    $body.Password = ''
+                    $body.PasswordConfirmation = ''
+                    Write-WebAuditRecord -Action 'Initial administrator setup code rejected' -Outcome 'Denied' `
+                        -Details @{ RemainingAttempts = [Math]::Max(0, 5 - $attempts.Count) }
+                    Start-Sleep -Milliseconds 350
+                    Send-WebJson -Response $response -StatusCode 401 -Value @{ error = 'The one-time setup code is invalid.' }
+                    continue
+                }
+                if (-not [string]::Equals([string]$body.Password, [string]$body.PasswordConfirmation, [StringComparison]::Ordinal)) {
+                    $body.Password = ''
+                    $body.PasswordConfirmation = ''
+                    Send-WebJson -Response $response -StatusCode 400 -Value @{ error = 'The passwords do not match.' }
+                    continue
+                }
+                $username = ([string]$body.Username).Trim()
+                $password = [string]$body.Password
+                $securePassword = $null
+                $record = $null
+                $body.Password = ''
+                $body.PasswordConfirmation = ''
+                try {
+                    $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
+                    $record = New-MigrationWebPasswordRecord -Username $username -Password $securePassword
+                    Save-MigrationWebAuthRecord -Record $record -Path $fullAuthPath `
+                        -PortableMode:$script:PortableMode -CreateOnly
+                }
+                finally {
+                    $password = ''
+                    if ($securePassword) { $securePassword.Dispose() }
+                }
+                $script:AuthRecord = @{
+                    Username = $record.Username
+                    Salt = $record.Salt
+                    PasswordHash = $record.PasswordHash
+                    Iterations = $record.Iterations
+                    CreatedUtc = $record.CreatedUtc
+                }
+                $script:SetupToken = $null
+                $script:SetupAttempts.Remove($address)
+                $tokenBytes = [byte[]]::new(32)
+                [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
+                $token = [Convert]::ToBase64String($tokenBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+                [Array]::Clear($tokenBytes, 0, $tokenBytes.Length)
+                $script:Sessions[$token] = @{ Username = [string]$script:AuthRecord.Username; ExpiresUtc = [DateTime]::UtcNow.AddHours(8) }
+                Write-WebAuditRecord -Action 'Initial administrator account created' -Actor $script:AuthRecord.Username -Outcome 'Succeeded'
+                Set-WebSessionCookie -Response $response -Token $token
+                Send-WebJson -Response $response -StatusCode 201 -Value @{
+                    authenticated = $true
+                    username = [string]$script:AuthRecord.Username
+                }
+                continue
+            }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/login') {
                 if ($script:AuthenticationMode -eq 'Windows') {
                     Send-WebJson -Response $response -StatusCode 409 -Value @{ error = 'Application-password login is disabled while Windows authentication is active.'; authMode = 'Windows' }
+                    continue
+                }
+                if ($null -eq $script:AuthRecord) {
+                    Send-WebJson -Response $response -StatusCode 409 -Value @{ error = 'Create the first administrator account before signing in.'; setupRequired = $true }
                     continue
                 }
                 $address = [string]$request.RemoteEndPoint.Address
@@ -1325,6 +1435,74 @@ try {
                 if ($cookie) { $script:Sessions.Remove($cookie.Value) }
                 Set-WebSessionCookie -Response $response
                 Send-WebJson -Response $response -StatusCode 200 -Value @{ authenticated = $false }
+                continue
+            }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/admin/reset-logs') {
+                if ($script:AuthenticationMode -ne 'Application') {
+                    Send-WebJson -Response $response -StatusCode 409 -Value @{ error = 'Log reset with password confirmation is unavailable while Windows authentication is active.' }
+                    continue
+                }
+                $address = [string]$request.RemoteEndPoint.Address
+                $attempts = @($script:AdminReauthAttempts[$address] | Where-Object { $_ -gt [DateTime]::UtcNow.AddMinutes(-10) })
+                if ($attempts.Count -ge 5) {
+                    $script:AdminReauthAttempts[$address] = $attempts
+                    Write-WebAuditRecord -Action 'Administrator log reset rate limited' -Actor $session.Username -Outcome 'Denied' -Details @{ WindowMinutes = 10 }
+                    Send-WebJson -Response $response -StatusCode 429 -Value @{ error = 'Too many password confirmation attempts. Try again in 10 minutes.' }
+                    continue
+                }
+                $body = Read-WebRequestJson -Request $request
+                if (-not $body.Contains('Password') -or -not $body.Contains('Confirmation')) {
+                    throw [ArgumentException]::new('Password and Confirmation are required.')
+                }
+                $password = [string]$body.Password
+                $validPassword = $false
+                try {
+                    $validPassword = Test-MigrationWebPassword -Record $script:AuthRecord `
+                        -Username $session.Username -Password $password
+                }
+                finally {
+                    $password = ''
+                    $body.Password = ''
+                }
+                if (-not $validPassword) {
+                    $attempts += [DateTime]::UtcNow
+                    $script:AdminReauthAttempts[$address] = $attempts
+                    Write-WebAuditRecord -Action 'Administrator log reset password confirmation failed' `
+                        -Actor $session.Username -Outcome 'Denied' -Details @{ RemainingAttempts = [Math]::Max(0, 5 - $attempts.Count) }
+                    Start-Sleep -Milliseconds 350
+                    Send-WebJson -Response $response -StatusCode 401 -Value @{ error = 'Password confirmation failed.' }
+                    continue
+                }
+                if ([string]$body.Confirmation -cne 'CLEAR') {
+                    Write-WebAuditRecord -Action 'Administrator log reset rejected' -Actor $session.Username `
+                        -Outcome 'Rejected' -Details @{ Reason = 'ConfirmationPhraseMismatch' }
+                    Send-WebJson -Response $response -StatusCode 400 -Value @{ error = 'Type CLEAR to confirm the log reset.' }
+                    continue
+                }
+                $migrationLogsPending = $script:RunId -and $script:MigrationCompletionLoggedRunId -ne $script:RunId
+                $patchLogsPending = $script:PatchRunId -and $script:PatchCompletionLoggedRunId -ne $script:PatchRunId
+                if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
+                    ($script:PatchProcess -and -not $script:PatchProcess.HasExited) -or
+                    $migrationLogsPending -or $patchLogsPending) {
+                    Write-WebAuditRecord -Action 'Administrator log reset rejected' -Actor $session.Username `
+                        -Outcome 'Rejected' -Details @{ Reason = 'OperationInProgress' }
+                    Send-WebJson -Response $response -StatusCode 409 -Value @{ error = 'Logs cannot be reset while a migration or patch operation is running or its completion is still being recorded.' }
+                    continue
+                }
+
+                $deletedFileCount = Clear-MigrationWebLogs -LogDirectory $script:HostLogDirectory
+                Write-WebAuditRecord -Action 'Administrator cleared application logs and audit trail' `
+                    -Actor $session.Username -Outcome 'Succeeded' -Details @{
+                        DeletedFileCount = $deletedFileCount
+                        Preserved = 'Generated migration and patch reports'
+                    }
+                Write-WebHostLog -Level Warning -Message "Administrator '$($session.Username)' cleared application host, run, and audit logs."
+                $script:AdminReauthAttempts.Remove($address)
+                Send-WebJson -Response $response -StatusCode 200 -Value @{
+                    deletedFileCount = $deletedFileCount
+                    auditResetRecorded = $true
+                    reportsPreserved = $true
+                }
                 continue
             }
             if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/defaults') {
@@ -1435,6 +1613,84 @@ ORDER BY s.name;
                     failedCount = @($validation | Where-Object Status -eq 'Failed').Count
                     skippedCount = @($validation | Where-Object Status -eq 'Skipped').Count
                     validatedAt = [DateTime]::UtcNow.ToString('o')
+                }
+                continue
+            }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/readiness-assessment') {
+                if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
+                    ($script:PatchProcess -and -not $script:PatchProcess.HasExited)) {
+                    throw [System.InvalidOperationException]::new('Readiness assessment is unavailable while migration or patching is running.')
+                }
+                $body = Read-WebRequestJson -Request $request
+                if (-not $body.Contains('Pair') -or -not $body.Contains('Databases') -or
+                    $body.Databases -isnot [array] -or $body.Databases.Count -lt 1 -or $body.Databases.Count -gt 100) {
+                    throw [ArgumentException]::new('Provide a source/target Pair and between 1 and 100 selected database names.')
+                }
+                $pair = @(ConvertTo-WebPairs -Pairs @($body.Pair))[0]
+                $databaseNames = [System.Collections.Generic.List[string]]::new()
+                $uniqueDatabaseNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                foreach ($databaseName in $body.Databases) {
+                    if ($databaseName -isnot [string] -or [string]::IsNullOrWhiteSpace($databaseName)) {
+                        throw [ArgumentException]::new('Every Databases entry must be a non-empty database name.')
+                    }
+                    $normalizedDatabaseName = $databaseName.Trim()
+                    if ($uniqueDatabaseNames.Add($normalizedDatabaseName)) {
+                        $databaseNames.Add($normalizedDatabaseName)
+                    }
+                }
+                $availableDatabases = @(Get-MigrationDatabase -SqlInstance $pair.Source -Configuration $script:WebConfiguration |
+                    ForEach-Object { [string]$_.Name })
+                $invalidDatabases = @($databaseNames | Where-Object { $_ -notin $availableDatabases })
+                if ($invalidDatabases.Count -gt 0) {
+                    throw [ArgumentException]::new("Refresh discovery; database(s) not available for assessment on source '$($pair.Source)': $($invalidDatabases -join ', ').")
+                }
+                $startedAt = [DateTime]::UtcNow
+                Write-WebAuditRecord -Action 'Migration readiness assessment requested' -Actor $session.Username `
+                    -Outcome 'Requested' -Details @{
+                        Source = $pair.Source
+                        Target = $pair.Target
+                        Databases = $databaseNames.ToArray()
+                        DatabaseCount = $databaseNames.Count
+                        MigrationMode = $pair.MigrationMode
+                    }
+                try {
+                    $bufferPercent = if ($script:WebConfiguration.Contains('RestoreSpaceBufferPercent')) {
+                        [double]$script:WebConfiguration.RestoreSpaceBufferPercent
+                    } else { 20 }
+                    $assessments = @(Get-MigrationReadinessAssessment -Source $pair.Source -Target $pair.Target `
+                        -Databases $databaseNames.ToArray() -MigrationMode $pair.MigrationMode -BufferPercent $bufferPercent)
+                }
+                catch {
+                    Write-WebAuditRecord -Action 'Migration readiness assessment completed' -Actor $session.Username `
+                        -Outcome 'Failed' -Details @{
+                            Source = $pair.Source
+                            Target = $pair.Target
+                            DatabaseCount = $databaseNames.Count
+                        }
+                    throw
+                }
+                $blockedCount = @($assessments | Where-Object Readiness -eq 'Blocked').Count
+                $reviewCount = @($assessments | Where-Object Readiness -eq 'Review required').Count
+                Write-WebAuditRecord -Action 'Migration readiness assessment completed' -Actor $session.Username `
+                    -Outcome $(if ($blockedCount -gt 0) { 'Failed' } elseif ($reviewCount -gt 0) { 'PartiallyFailed' } else { 'Succeeded' }) -Details @{
+                        Source = $pair.Source
+                        Target = $pair.Target
+                        Databases = $databaseNames.ToArray()
+                        DatabaseCount = $databaseNames.Count
+                        BlockedCount = $blockedCount
+                        ReviewRequiredCount = $reviewCount
+                        ElapsedMilliseconds = [int](([DateTime]::UtcNow - $startedAt).TotalMilliseconds)
+                    }
+                Send-WebJson -Response $response -StatusCode 200 -Value @{
+                    source = $pair.Source
+                    target = $pair.Target
+                    migrationMode = $pair.MigrationMode
+                    assessments = $assessments
+                    databaseCount = $assessments.Count
+                    blockedCount = $blockedCount
+                    reviewRequiredCount = $reviewCount
+                    noBlockersCount = @($assessments | Where-Object Readiness -eq 'No blockers detected').Count
+                    assessedAt = [DateTime]::UtcNow.ToString('o')
                 }
                 continue
             }

@@ -19,6 +19,35 @@ function Add-MigrationJsonLine {
     )
 }
 
+function Clear-MigrationWebLogs {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $LogDirectory
+    )
+
+    if (-not (Test-Path -LiteralPath $LogDirectory -PathType Container)) {
+        return 0
+    }
+
+    $logFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($pattern in @('WebHost-*.log', 'Migration-*.jsonl', 'Patch-*.jsonl')) {
+        foreach ($file in Get-ChildItem -LiteralPath $LogDirectory -Filter $pattern -File -ErrorAction Stop) {
+            $null = $logFiles.Add($file.FullName)
+        }
+    }
+    foreach ($name in @('Audit.jsonl', 'Audit.key', 'Audit.jsonl.head')) {
+        $path = Join-Path $LogDirectory $name
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $null = $logFiles.Add($path)
+        }
+    }
+
+    foreach ($path in $logFiles) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+    }
+    return $logFiles.Count
+}
+
 function Get-MigrationJsonLines {
     [CmdletBinding()]
     param(
@@ -558,4 +587,4 @@ function Get-MigrationReportingData {
     }
 }
 
-Export-ModuleMember -Function Add-MigrationJsonLine, Add-MigrationAuditRecord, Get-MigrationAuditLog, Get-MigrationReportingData
+Export-ModuleMember -Function Add-MigrationJsonLine, Clear-MigrationWebLogs, Add-MigrationAuditRecord, Get-MigrationAuditLog, Get-MigrationReportingData

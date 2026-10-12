@@ -28,8 +28,9 @@
     #application { display: grid; grid-template-areas: "migration editor" "patch monitor" "disk disk" "live live"; grid-template-columns: minmax(310px, .8fr) minmax(0, 1.8fr); grid-template-rows: auto auto auto auto; align-content: start; gap: 7px; min-height: calc(100vh - 76px); }
     #application.reports-view { grid-template-areas: "reporting"; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; }
     #application.reports-view > section:not(#reporting-workspace) { display: none; }
+    #application:not(.migration-view):not(.patch-view) > #migration-setup,
+    #application:not(.migration-view):not(.patch-view) > #patch-workspace { display: none; }
     #migration-setup { grid-area: migration; min-height: 0; }
-    #migration-monitor { grid-area: monitor; min-height: 0; }
     #custom-sql-workspace { grid-area: editor; min-height: 0; }
     #patch-workspace { grid-area: patch; min-width: 0; }
     #disk-usage-workspace { grid-area: disk; min-width: 0; }
@@ -72,6 +73,20 @@
     .disk-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 12px; margin-top: 12px; }
     .disk-server-card { min-width: 0; border: 1px solid #d3dae3; border-radius: 8px; padding: 12px; background: #fbfcfe; }
     .disk-server-card h3 { margin: 0 0 4px; font-size: 14px; overflow-wrap: anywhere; }
+    .custom-sql-export-toolbar { margin: 14px 0 10px; padding: 12px; border: 1px solid #d8e0e8; border-radius: 8px; background: #f8fafc; }
+    .custom-sql-result-set { margin-top: 12px; padding: 12px; border: 1px solid #d8e0e8; border-radius: 8px; background: #fff; }
+    .custom-sql-result-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+    .custom-sql-result-header h3 { min-width: 0; margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+    .custom-sql-result-select { display: flex; min-width: 0; align-items: center; gap: 8px; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+    .custom-sql-result-actions { display: flex; flex: 0 0 auto; gap: 8px; align-items: center; }
+    .readiness-report { margin-top: 12px; padding: 14px; border: 1px solid #d8e0e8; border-radius: 8px; background: #fff; }
+    .readiness-report-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .readiness-report-header h4 { margin: 0; font-size: 15px; }
+    .readiness-report-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .readiness-findings td { min-width: 120px; max-width: 420px; white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+    .readiness-findings td:nth-child(6), .readiness-findings td:nth-child(7) { min-width: 220px; }
+    .readiness-severity-critical { color: #a52121; font-weight: 700; }
+    .readiness-severity-warning { color: #805300; font-weight: 700; }
     .disk-volume { margin-top: 14px; }
     .disk-volume-header, .disk-volume-legend { display: flex; justify-content: space-between; gap: 10px; align-items: center; font-size: 12px; }
     .disk-volume-header { margin-bottom: 5px; }
@@ -256,6 +271,12 @@
       .patch-actions > button { flex: 1 1 100%; }
       .patch-actions > .muted { flex: 1 1 100%; }
       #custom-query { min-height: 200px; }
+      .custom-sql-result-header { align-items: stretch; flex-direction: column; }
+      .custom-sql-result-actions { flex-wrap: wrap; }
+      .custom-sql-result-actions button { flex: 1 1 100%; }
+      .readiness-report-header { flex-direction: column; }
+      .readiness-report-actions { width: 100%; }
+      .readiness-report-actions button { flex: 1 1 100%; }
       .monitor-dashboard { grid-template-columns: 1fr; }
       .monitor-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .live-monitor-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -443,15 +464,144 @@
     @media (max-width: 480px) {
       footer { flex-wrap: wrap; justify-content: center; }
     }
+    body.migration-workspace-active, body.patch-workspace-active { height: 100vh; height: 100dvh; overflow: hidden; }
+    body.migration-workspace-active > footer, body.patch-workspace-active > footer { display: none; }
+    body.focus-workspace-active { height: 100vh; height: 100dvh; overflow: hidden; }
+    body.focus-workspace-active > footer { display: none; }
+    main.migration-view-main, main.patch-view-main, main.focus-workspace-main { display: flex; flex: 1; flex-direction: column; width: 100%; max-width: none; min-height: 0; overflow: hidden; }
+    #application.focus-workspace { display: flex; flex: 1; height: 100%; min-height: 0; flex-direction: column; }
+    #application.focus-workspace > section:not(.workspace-current) { display: none; }
+    #application.focus-workspace > .workspace-current { display: block; flex: 1; min-height: 0; overflow: auto; }
+    #application.migration-view {
+      flex: 1;
+      height: 100%;
+      align-content: stretch;
+      grid-template-areas: "migration";
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      min-height: 0;
+    }
+    #application.migration-view > section:not(#migration-setup) { display: none; }
+    #application.migration-view > #migration-setup { display: block; height: 100%; min-height: 0; }
+    #migration-setup.migration-workspace-panel { overflow: auto; }
+    #migration-setup.migration-workspace-panel > #migration-setup-details { position: relative; height: auto; min-height: 0; }
+    #migration-setup.migration-workspace-panel > #migration-setup-details > summary { position: static; }
+    #migration-setup.migration-workspace-panel #migration-setup-content { position: static; overflow: visible; }
+    #application.patch-view {
+      flex: 1;
+      height: 100%;
+      align-content: stretch;
+      grid-template-areas: "patch";
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      min-height: 0;
+    }
+    #application.patch-view > section:not(#patch-workspace) { display: none; }
+    #application.patch-view > #patch-workspace { display: block; height: 100%; min-height: 0; }
+    #patch-workspace.patch-workspace-panel > #patch-panel { position: relative; height: 100%; min-height: 0; }
+    #patch-workspace.patch-workspace-panel > #patch-panel > summary { position: absolute; z-index: 1; inset: 0 0 auto; }
+    #patch-workspace.patch-workspace-panel .patch-content { position: absolute; inset: 48px 0 0; overflow: auto; }
+    :root {
+      --canvas: #f3f6fa;
+      --surface: #fff;
+      --surface-subtle: #f7f9fc;
+      --line: #d8e1eb;
+      --text-primary: #182b3d;
+      --text-muted: #5c6f82;
+      --success: #18794e;
+      --success-bg: #eaf6ef;
+      --warning: #8a5a00;
+      --warning-bg: #fff5df;
+      --danger: #a1262f;
+      --danger-bg: #fff0f0;
+      --info: #1769aa;
+      --info-bg: #eaf4fb;
+    }
+    body { color: var(--text-primary); background: var(--canvas); }
+    header { min-height: 68px; padding: 10px 22px; box-shadow: 0 2px 10px rgba(18, 44, 70, .14); }
+    main { max-width: none; padding: 18px clamp(12px, 2vw, 28px); }
+    #application { gap: 14px; }
+    .app-navigation { flex-wrap: nowrap; }
+    .app-navigation a { padding: 9px 14px; border: 1px solid transparent; border-radius: 7px; transition: background-color .15s ease, border-color .15s ease; }
+    .app-navigation a[aria-current="page"] { color: #fff; background: rgba(255,255,255,.18); border-color: rgba(255,255,255,.28); font-weight: 700; }
+    .card { border-color: var(--line); border-radius: 10px; box-shadow: 0 2px 8px rgba(26, 48, 70, .05); }
+    h2 { color: #243d55; background: var(--surface-subtle); border-color: #e1e8ef; }
+    .pair-card { border-color: #d5e1eb; border-left: 3px solid var(--info); background: #fbfdff; }
+    .migration-setup-disclosure > summary, .patch-panel summary { color: #243d55; background: #f4f7fa; }
+    #migration-monitor { margin-top: 18px; border-color: #c9d9e7; background: #fafdff; }
+    #migration-monitor h2 { color: #164c76; background: #edf5fb; border-color: #d3e3ef; }
+    .monitor-stage-card, .monitor-current-card { border-color: #d5e2ec; background: #fff; }
+    .status-success { color: var(--success) !important; border-color: #a8d8ba !important; background: var(--success-bg) !important; }
+    .status-warning { color: var(--warning) !important; border-color: #e8cc83 !important; background: var(--warning-bg) !important; }
+    .status-active { color: #145d90 !important; border-color: #a9cde5 !important; background: var(--info-bg) !important; }
+    .status-error { color: var(--danger) !important; border-color: #e7b2b5 !important; background: var(--danger-bg) !important; }
+    .status-neutral { color: #53677a !important; border-color: #d2dce6 !important; background: #f1f4f7 !important; }
+    #run-status.status-success, #patch-status.status-success { font-weight: 700; }
+    #run-status.status-warning, #patch-status.status-warning { font-weight: 700; }
+    #run-status.status-error, #patch-status.status-error { font-weight: 700; }
+    .monitor-metric { border-color: #dce5ed; background: #fff; }
+    .monitor-metric.completed { border-top: 3px solid var(--success); }
+    .monitor-metric.skipped { border-top: 3px solid #d28a00; }
+    .monitor-metric.active { border-top: 3px solid var(--info); }
+    .monitor-metric.failed { border-top: 3px solid #c43d3d; }
+    .patch-metric { border-color: #dce5ed; border-radius: 8px; }
+    .patch-result-eligible { color: var(--success); }
+    .patch-result-unsupportedcluster, .patch-result-versionmismatch, .patch-result-servicepackmismatch, .patch-result-unknownbuild { color: var(--danger); }
+    .validation-passed { color: var(--success); font-weight: 600; }
+    .validation-failed { color: var(--danger); font-weight: 600; }
+    .validation-skipped, .validation-warning { color: var(--warning); font-weight: 600; }
+    .error:not(:empty) { color: var(--danger); background: var(--danger-bg); border-color: #e7b2b5; }
+    #options.options {
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+      gap: 10px 20px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface-subtle);
+    }
+    #options.options > .check { min-width: 0; min-height: 38px; margin: 0; }
+    #options.options > .check {
+      display: flex;
+      align-items: center;
+      padding: 9px 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      transition: border-color .15s ease, background-color .15s ease;
+    }
+    #options.options > .check:hover { border-color: #9bb6ce; }
+    #options.options > .check:focus-within { outline: 3px solid rgba(23,105,170,.2); outline-offset: 1px; }
+    #options.options > .check:has(input:checked) {
+      border-color: #9dc9e5;
+      color: #145d90;
+      background: var(--info-bg);
+      font-weight: 600;
+    }
+    @media (max-width: 620px) {
+      #options.options { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+    }
+    input[type="text"], input[type="password"], select, textarea { border-color: #c6d2de; }
+    button:not(.secondary) { box-shadow: 0 1px 2px rgba(13, 71, 120, .12); }
+    button:disabled { box-shadow: none; }
+    @media (max-width: 900px) {
+      header { padding-inline: 14px; }
+      .app-navigation { flex-wrap: wrap; }
+    }
+    @media (max-width: 620px) {
+      header { min-height: 0; padding-inline: 10px; }
+      main { padding: 10px; }
+      .app-navigation { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .app-navigation a { padding: 8px 5px; font-size: 12px; }
+      #migration-monitor { margin-top: 12px; }
+    }
   </style>
 </head>
 <body>
   <header>
     <div class="brand"><h1>Database Migration</h1><span class="header-context">SQL Server management workspace</span></div>
     <nav id="app-navigation" class="app-navigation hidden" aria-label="Workspace sections">
-      <a href="#migration-setup">Migration</a>
-      <a href="#patch-panel">Patching</a>
-      <a href="#migration-monitor">Monitor</a>
+      <a href="#migration-setup" id="migration-navigation-link">Migration</a>
+      <a href="#patch-panel" id="patch-navigation-link">Patching</a>
       <a href="#live-server-monitor-workspace">Live server monitor</a>
       <a href="#custom-sql-workspace">Custom SQL</a>
       <a href="#disk-usage-workspace">Disk usage</a>
@@ -462,7 +612,7 @@
       <button id="logout" class="secondary hidden">Sign out</button>
     </div>
   </header>
-  <main>
+  <main id="workspace-main">
     <section id="login-card" class="card">
       <h2>Sign in</h2>
       <div class="login-visual" aria-hidden="true">
@@ -518,6 +668,22 @@
         <h3>Move your data with confidence.</h3>
         <p>Plan, migrate, and monitor SQL Server environments from one secure workspace.</p>
       </div>
+      <section id="first-run-setup" class="hidden" style="padding:20px">
+        <h3>Create the first administrator</h3>
+        <p class="muted">This installation has no application account yet. Complete setup from the web-host computer using the one-time code shown in its PowerShell window. The code is not sent to the browser automatically.</p>
+        <form id="first-run-setup-form">
+          <label for="setup-code">One-time setup code</label>
+          <input id="setup-code" type="password" autocomplete="off" required>
+          <label for="setup-username" style="margin-top:12px">Administrator username</label>
+          <input id="setup-username" type="text" autocomplete="username" maxlength="128" required>
+          <label for="setup-password" style="margin-top:12px">Password (at least 14 characters)</label>
+          <input id="setup-password" type="password" autocomplete="new-password" minlength="14" maxlength="1024" required>
+          <label for="setup-password-confirmation" style="margin-top:12px">Confirm password</label>
+          <input id="setup-password-confirmation" type="password" autocomplete="new-password" minlength="14" maxlength="1024" required>
+          <button id="create-first-admin" style="margin-top:16px;width:100%">Create administrator account</button>
+          <div id="setup-error" class="error" role="alert"></div>
+        </form>
+      </section>
       <form id="login-form">
         <label for="username">Application username</label>
         <input id="username" type="text" autocomplete="username" required maxlength="128">
@@ -540,6 +706,13 @@
           <span id="reporting-status" class="muted" aria-live="polite">Reports have not been loaded.</span>
         </div>
         <div id="reporting-error" class="error" role="alert"></div>
+        <section id="admin-log-reset" class="card" style="margin-top:16px">
+          <h3>Administrator actions</h3>
+          <p class="muted">Permanently clear application host logs, migration/patch activity logs, and the audit trail. Generated migration and patch reports are retained. A new signed audit event records the reset.</p>
+          <button id="open-log-reset" class="secondary" type="button">Reset logs and audit trail</button>
+          <p id="log-reset-status" class="muted" role="status" aria-live="polite"></p>
+          <div id="log-reset-error" class="error" role="alert"></div>
+        </section>
         <h3>Migration summaries</h3>
         <div id="migration-report-table" class="table-wrap"></div>
         <h4>Users, jobs &amp; linked servers</h4>
@@ -599,6 +772,7 @@
           <div id="migration-setup-content">
             <p class="muted">Pairs run one after another. Databases within each pair run sequentially; each database is validated, migrated, post-checked, and its temporary backup deleted before the next begins.</p>
             <p class="muted">Enter a hostname, SQL instance (for example, HOST\INSTANCE), or IP address. Validate checks SQL connectivity/version and shared-drive access before discovery.</p>
+            <p class="muted">Optional: after discovery, select databases and run <strong>Assess readiness only</strong> to check migration risks and download a report. This does not start a migration. The assessment is DMA-inspired, not the retired Microsoft DMA tool, and does not replace application testing.</p>
             <label class="check"><input id="remember-settings" type="checkbox" checked> Remember source, target, and shared backup paths in this browser</label>
             <p class="muted">Previously used servers and backup paths are suggested as you type (like SSMS), and picking a known source or target autofills its last-used partner and backup path. No credentials are stored. <a href="#" id="clear-history">Clear history</a></p>
             <div id="pair-list"></div>
@@ -610,8 +784,7 @@
               <label class="check"><input type="checkbox" data-option="MigrateLogins"> SQL logins (excluding sa)</label>
               <label class="check"><input type="checkbox" data-option="MigrateAgentJobs"> SQL Agent jobs (disabled on target)</label>
               <label class="check"><input type="checkbox" data-option="MigrateAgentOperators"> SQL Agent operators</label>
-              <label class="check"><input type="checkbox" data-option="ConfigureLinkedServers"> Configure linked servers</label>
-              <label class="check"><input type="checkbox" data-option="SkipLinkedServers" checked> Skip linked servers for this run</label>
+              <label class="check"><input type="checkbox" data-option="ConfigureLinkedServers"> Configure linked servers (optional)</label>
               <label class="check"><input type="checkbox" data-option="RepairOrphanUsers"> Repair orphaned users</label>
               <label class="check"><input type="checkbox" data-option="UpdateStatistics"> Update statistics</label>
             </div>
@@ -641,6 +814,48 @@
             </div>
           </div>
         </details>
+        <section id="migration-monitor" class="card">
+          <h2>Live migration monitor</h2>
+          <div class="status-line">
+            <span id="run-status" class="pill">No migration running</span>
+            <span id="active-stage" class="muted">Waiting for a migration.</span>
+          </div>
+          <div class="monitor-dashboard">
+            <div class="monitor-stage-card">
+              <div id="monitor-stage-ring" class="monitor-stage-ring" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <strong id="monitor-stage-percent">0%</strong>
+              </div>
+              <div class="monitor-stage-copy">
+                <strong>Current stage</strong>
+                <span id="monitor-stage-name">Waiting for migration progress.</span>
+              </div>
+            </div>
+            <div class="monitor-current-card">
+              <strong>Current job</strong>
+              <span id="monitor-current-job">No active database job.</span>
+              <span id="monitor-current-pair">Waiting for a migration.</span>
+            </div>
+          </div>
+          <div class="monitor-metrics" aria-live="polite">
+            <div class="monitor-metric"><strong id="monitor-total-jobs">0</strong><span>Total database jobs</span></div>
+            <div class="monitor-metric completed"><strong id="monitor-completed-jobs">0</strong><span>Completed</span></div>
+            <div class="monitor-metric skipped"><strong id="monitor-skipped-jobs">0</strong><span>Skipped</span></div>
+            <div class="monitor-metric active"><strong id="monitor-active-jobs">0</strong><span>In progress</span></div>
+            <div class="monitor-metric pending"><strong id="monitor-pending-jobs">0</strong><span>Pending</span></div>
+            <div class="monitor-metric failed"><strong id="monitor-failed-jobs">0</strong><span>Failed</span></div>
+          </div>
+          <div id="outcome-counts" class="muted" style="margin-bottom:8px"></div>
+          <div class="progress-label"><span>Overall database job completion</span><strong id="monitor-overall-percent">0%</strong></div>
+          <div class="progress"><div id="progress-bar"></div></div>
+          <div class="progress-label"><span id="step-progress-label">No active step.</span><strong id="step-progress-percent">0%</strong></div>
+          <div class="progress step-progress"><div id="step-progress-bar"></div></div>
+          <div class="row" style="margin:8px 0 12px">
+            <button id="pause-run" class="secondary" type="button" disabled>Pause</button>
+            <button id="resume-run" class="secondary" type="button" disabled>Resume</button>
+            <button id="stop-run" class="secondary" type="button" disabled>Stop safely</button>
+          </div>
+          <div id="events" aria-live="polite"></div>
+        </section>
       </section>
 
       <section id="patch-workspace" class="card">
@@ -673,49 +888,6 @@
             <div class="muted" style="margin-top:7px">Clustered SQL Server instances are not supported by this workflow. Use a cluster-aware patch plan for those servers.</div>
           </div>
         </details>
-      </section>
-
-      <section id="migration-monitor" class="card">
-        <h2>Live migration monitor</h2>
-        <div class="status-line">
-          <span id="run-status" class="pill">No migration running</span>
-          <span id="active-stage" class="muted">Waiting for a migration.</span>
-        </div>
-        <div class="monitor-dashboard">
-          <div class="monitor-stage-card">
-            <div id="monitor-stage-ring" class="monitor-stage-ring" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-              <strong id="monitor-stage-percent">0%</strong>
-            </div>
-            <div class="monitor-stage-copy">
-              <strong>Current stage</strong>
-              <span id="monitor-stage-name">Waiting for migration progress.</span>
-            </div>
-          </div>
-          <div class="monitor-current-card">
-            <strong>Current job</strong>
-            <span id="monitor-current-job">No active database job.</span>
-            <span id="monitor-current-pair">Waiting for a migration.</span>
-          </div>
-        </div>
-        <div class="monitor-metrics" aria-live="polite">
-          <div class="monitor-metric"><strong id="monitor-total-jobs">0</strong><span>Total database jobs</span></div>
-          <div class="monitor-metric completed"><strong id="monitor-completed-jobs">0</strong><span>Completed</span></div>
-          <div class="monitor-metric skipped"><strong id="monitor-skipped-jobs">0</strong><span>Skipped</span></div>
-          <div class="monitor-metric active"><strong id="monitor-active-jobs">0</strong><span>In progress</span></div>
-          <div class="monitor-metric pending"><strong id="monitor-pending-jobs">0</strong><span>Pending</span></div>
-          <div class="monitor-metric failed"><strong id="monitor-failed-jobs">0</strong><span>Failed</span></div>
-        </div>
-        <div id="outcome-counts" class="muted" style="margin-bottom:8px"></div>
-        <div class="progress-label"><span>Overall database job completion</span><strong id="monitor-overall-percent">0%</strong></div>
-        <div class="progress"><div id="progress-bar"></div></div>
-        <div class="progress-label"><span id="step-progress-label">No active step.</span><strong id="step-progress-percent">0%</strong></div>
-        <div class="progress step-progress"><div id="step-progress-bar"></div></div>
-        <div class="row" style="margin:8px 0 12px">
-          <button id="pause-run" class="secondary" type="button" disabled>Pause</button>
-          <button id="resume-run" class="secondary" type="button" disabled>Resume</button>
-          <button id="stop-run" class="secondary" type="button" disabled>Stop safely</button>
-        </div>
-        <div id="events" aria-live="polite"></div>
       </section>
 
       <section id="custom-sql-workspace" class="card">
@@ -774,6 +946,23 @@
         </div>
         <div id="custom-sql-status" class="muted" style="margin-top:12px"></div>
         <div id="custom-sql-error" class="error" role="alert"></div>
+        <div id="custom-sql-export-toolbar" class="custom-sql-export-toolbar hidden" aria-label="Download query output">
+          <div class="row">
+            <div class="grow">
+              <label for="custom-sql-export-format">File format</label>
+              <select id="custom-sql-export-format">
+                <option value="csv">CSV (Excel compatible)</option>
+                <option value="json">JSON</option>
+                <option value="tsv">TSV</option>
+                <option value="xml">XML</option>
+              </select>
+            </div>
+            <label class="check" style="align-self:center"><input id="custom-sql-select-all" type="checkbox" disabled> Select all successful outputs</label>
+            <button id="custom-sql-download-selected" class="secondary" type="button" disabled>Download selected</button>
+            <button id="custom-sql-download-all" class="secondary" type="button" disabled>Download all</button>
+          </div>
+          <div id="custom-sql-export-status" class="muted" style="margin-top:8px" aria-live="polite"></div>
+        </div>
         <div id="custom-sql-results" class="table-wrap hidden" style="margin-top:12px"></div>
       </section>
 
@@ -823,6 +1012,23 @@
       <button id="app-dialog-cancel" class="secondary" type="button">Cancel</button>
       <button id="app-dialog-confirm" type="button">OK</button>
     </div>
+  </dialog>
+  <dialog id="log-reset-dialog" class="app-dialog" data-kind="warning" aria-labelledby="log-reset-title" aria-describedby="log-reset-description">
+    <form id="log-reset-form">
+      <h2 id="log-reset-title">Confirm permanent log reset</h2>
+      <div class="app-dialog-body">
+        <p id="log-reset-description">This permanently deletes current host, migration/patch activity, and audit log files. Generated migration and patch reports will remain. Enter your current application password and type CLEAR to continue.</p>
+        <label for="log-reset-password">Current application password</label>
+        <input id="log-reset-password" type="password" autocomplete="current-password" required>
+        <label for="log-reset-confirmation" style="margin-top:12px">Type CLEAR to confirm</label>
+        <input id="log-reset-confirmation" type="text" autocomplete="off" required>
+        <div id="log-reset-dialog-error" class="error" role="alert"></div>
+      </div>
+      <div class="app-dialog-actions">
+        <button id="cancel-log-reset" class="secondary" type="button">Cancel</button>
+        <button id="confirm-log-reset" type="submit" style="background:#a52121;border-color:#a52121">Permanently reset logs</button>
+      </div>
+    </form>
   </dialog>
   <footer><span>© 2026 Vishal Pillai</span><span>SQL Server Migration Tool</span></footer>
   <datalist id="history-servers"></datalist>
@@ -914,6 +1120,7 @@
     let alertedFailure = false;
     let pollInProgress = false;
     let applicationAuthenticated = false;
+    let firstRunSetupRequired = false;
     let suppressExistingEventReplay = false;
     let selectedDatabaseTotal = 0;
     let activeDatabaseKey = null;
@@ -941,7 +1148,18 @@
         signal
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
+      if (!response.ok) {
+        if (response.status === 404 && path === "/api/admin/reset-logs") {
+          throw new Error("The running web host does not include the log-reset endpoint. Fully stop and restart the updated Database Migration web host, then refresh this page.");
+        }
+        if (response.status === 404 && path === "/api/setup") {
+          throw new Error("The running web host does not include first-run setup. Fully stop and restart the updated Database Migration web host, then refresh this page.");
+        }
+        if (response.status === 404 && path === "/api/readiness-assessment") {
+          throw new Error("The running web host does not include readiness assessment. Update the installed app files, fully stop and restart the web host, then refresh this page.");
+        }
+        throw new Error(payload.error || `Request failed (${response.status})`);
+      }
       return payload;
     }
 
@@ -1114,8 +1332,13 @@
       const link = document.createElement("a");
       link.href = url;
       link.download = fileName;
+      link.hidden = true;
+      document.body.append(link);
       link.click();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+        link.remove();
+      }, 1000);
     }
 
     function refreshStatusColors() {
@@ -1180,6 +1403,42 @@
     }
 
     $("refresh-reporting").addEventListener("click", refreshReporting);
+    $("open-log-reset").addEventListener("click", () => {
+      $("log-reset-error").textContent = "";
+      $("log-reset-status").textContent = "";
+      $("log-reset-dialog-error").textContent = "";
+      $("log-reset-form").reset();
+      $("log-reset-dialog").showModal();
+      $("log-reset-password").focus();
+    });
+    $("cancel-log-reset").addEventListener("click", () => $("log-reset-dialog").close());
+    $("log-reset-dialog").addEventListener("close", () => {
+      $("log-reset-form").reset();
+      $("log-reset-dialog-error").textContent = "";
+    });
+    $("log-reset-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submitButton = $("confirm-log-reset");
+      submitButton.disabled = true;
+      $("log-reset-dialog-error").textContent = "";
+      $("log-reset-error").textContent = "";
+      try {
+        const result = await api("/api/admin/reset-logs", {
+          Password: $("log-reset-password").value,
+          Confirmation: $("log-reset-confirmation").value
+        });
+        $("log-reset-dialog").close();
+        $("log-reset-form").reset();
+        $("log-reset-status").textContent =
+          `Logs cleared (${result.deletedFileCount} files). A new signed audit reset event was recorded; migration and patch reports were preserved.`;
+        await refreshReporting();
+      } catch (error) {
+        $("log-reset-dialog-error").textContent = error.message;
+      } finally {
+        $("log-reset-password").value = "";
+        submitButton.disabled = false;
+      }
+    });
     for (const id of ["audit-search", "audit-actor-filter", "audit-outcome-filter", "audit-category-filter", "audit-severity-filter", "audit-from-date", "audit-to-date"]) {
       $(id).addEventListener("input", () => {
         clearTimeout(auditRefreshTimer);
@@ -1383,6 +1642,9 @@
       for (const error of document.querySelectorAll('[id$="-error"]')) error.textContent = "";
       const dialog = $("app-dialog");
       if (dialog.open) dialog.close();
+      const logResetDialog = $("log-reset-dialog");
+      if (logResetDialog.open) logResetDialog.close();
+      $("log-reset-form").reset();
       $("events").replaceChildren();
       eventCursor = 0;
       alertedFailure = false;
@@ -1413,9 +1675,17 @@
       $("application").classList.toggle("hidden", !authenticated);
       $("app-navigation").classList.toggle("hidden", !authenticated);
       $("logout").classList.toggle("hidden", !authenticated || windowsAuth);
+      $("admin-log-reset").classList.toggle("hidden", !authenticated || windowsAuth);
       $("current-user").textContent = authenticated && username ? `Signed in as ${username}` : "";
+      $("first-run-setup").classList.toggle("hidden", !firstRunSetupRequired || authenticated || windowsAuth);
+      $("login-form").classList.toggle("hidden", firstRunSetupRequired || windowsAuth);
+      $("login-card").querySelector("h2").textContent = firstRunSetupRequired ? "First-run setup" : "Sign in";
       if (authenticated) {
+        firstRunSetupRequired = false;
         initializePairs();
+        if (!$("app-navigation").querySelector('[aria-current="page"]')) $("migration-navigation-link").click();
+      } else {
+        resetWorkspaceView();
       }
     }
 
@@ -1438,19 +1708,58 @@
     persistDisclosureState("migration-setup-details", migrationSetupStateKey);
     persistDisclosureState("patch-panel", patchPanelStateKey);
 
+    function resetWorkspaceView() {
+      $("application").classList.remove("focus-workspace", "migration-view", "patch-view", "reports-view");
+      $("workspace-main").classList.remove("focus-workspace-main", "migration-view-main", "patch-view-main");
+      for (const section of $("application").querySelectorAll(":scope > section")) {
+        section.classList.remove("workspace-current", "migration-workspace-panel", "patch-workspace-panel");
+      }
+      document.body.classList.remove("focus-workspace-active", "migration-workspace-active", "patch-workspace-active");
+      for (const link of $("app-navigation").querySelectorAll("a")) link.removeAttribute("aria-current");
+    }
+
     $("app-navigation").addEventListener("click", (event) => {
       const link = event.target.closest("a");
       if (!link) return;
-      if (link.id === "reports-navigation-link") {
-        event.preventDefault();
-        $("application").classList.add("reports-view");
-        $("reporting-workspace").scrollIntoView({ block: "start" });
-        refreshReporting();
+      for (const item of $("app-navigation").querySelectorAll("a")) {
+        if (item === link) item.setAttribute("aria-current", "page");
+        else item.removeAttribute("aria-current");
+      }
+      if (link.id === "migration-navigation-link") {
+        resetWorkspaceView();
+        link.setAttribute("aria-current", "page");
+        $("application").classList.add("migration-view");
+        $("workspace-main").classList.add("migration-view-main");
+        $("migration-setup").classList.add("migration-workspace-panel");
+        document.body.classList.add("migration-workspace-active");
+        $("migration-setup-details").open = true;
+        window.scrollTo(0, 0);
         return;
       }
-      $("application").classList.remove("reports-view");
-      if (link.hash === "#migration-setup") $("migration-setup-details").open = true;
-      if (link.hash === "#patch-panel") $("patch-panel").open = true;
+      if (link.id === "patch-navigation-link") {
+        resetWorkspaceView();
+        link.setAttribute("aria-current", "page");
+        $("application").classList.add("patch-view");
+        $("workspace-main").classList.add("patch-view-main");
+        $("patch-workspace").classList.add("patch-workspace-panel");
+        document.body.classList.add("patch-workspace-active");
+        $("patch-panel").open = true;
+        window.scrollTo(0, 0);
+        return;
+      }
+      const workspace = document.querySelector(link.hash);
+      if (!workspace || workspace.parentElement !== $("application")) return;
+      resetWorkspaceView();
+      link.setAttribute("aria-current", "page");
+      $("application").classList.add("focus-workspace");
+      $("workspace-main").classList.add("focus-workspace-main");
+      workspace.classList.add("workspace-current");
+      document.body.classList.add("focus-workspace-active");
+      if (workspace.id === "reporting-workspace") {
+        $("application").classList.add("reports-view");
+        refreshReporting();
+      }
+      window.scrollTo(0, 0);
     });
 
     function saveSettings() {
@@ -1476,11 +1785,9 @@
         for (const checkbox of document.querySelectorAll("[data-option]")) {
           checkbox.checked = optionDefaults[checkbox.dataset.option] !== false;
         }
-        const skipLinkedServers = document.querySelector('[data-option="SkipLinkedServers"]');
         const configureLinkedServers = document.querySelector('[data-option="ConfigureLinkedServers"]');
-        skipLinkedServers.checked = true;
         configureLinkedServers.checked = false;
-        configureLinkedServers.disabled = true;
+        $("linked-server-setup").classList.add("hidden");
         let saved = null;
         try { saved = JSON.parse(localStorage.getItem(settingsKey) || "null"); } catch (_) {}
         $("remember-settings").checked = saved?.remember === true;
@@ -1688,6 +1995,177 @@
       });
       table.append(head, body);
       container.append(table);
+    }
+
+    let customSqlResultSets = [];
+
+    function updateCustomSqlExportControls() {
+      const successfulCount = customSqlResultSets.filter((result) => result.succeeded).length;
+      const selected = [...document.querySelectorAll("#custom-sql-results input[data-custom-sql-result-index]:checked")];
+      const selectedCount = selected.length;
+      const selectAll = $("custom-sql-select-all");
+      selectAll.disabled = successfulCount === 0;
+      selectAll.checked = successfulCount > 0 && selectedCount === successfulCount;
+      selectAll.indeterminate = selectedCount > 0 && selectedCount < successfulCount;
+      $("custom-sql-download-selected").disabled = selectedCount === 0;
+      $("custom-sql-download-all").disabled = customSqlResultSets.length === 0;
+      $("custom-sql-export-status").textContent =
+        `${selectedCount} of ${successfulCount} successful output(s) selected. Failed targets are retained in JSON/XML exports and included as status rows in CSV/TSV. CSV/TSV escape formula-like cells for spreadsheet safety.`;
+    }
+
+    function renderCustomSqlOutputSets(resultSets) {
+      customSqlResultSets = resultSets;
+      const container = $("custom-sql-results");
+      const toolbar = $("custom-sql-export-toolbar");
+      container.replaceChildren();
+      container.classList.remove("hidden");
+      toolbar.classList.toggle("hidden", resultSets.length === 0);
+      $("custom-sql-select-all").checked = false;
+      $("custom-sql-select-all").indeterminate = false;
+
+      resultSets.forEach((result, index) => {
+        const section = document.createElement("section");
+        section.className = "custom-sql-result-set";
+        const header = document.createElement("div");
+        header.className = "custom-sql-result-header";
+        const heading = document.createElement("h3");
+        heading.textContent = `${result.instance} · ${result.database} · ${result.succeeded ? `Success · ${result.rowCount} row(s)` : "Failed"}`;
+        const actions = document.createElement("div");
+        actions.className = "custom-sql-result-actions";
+        if (result.succeeded) {
+          const label = document.createElement("label");
+          label.className = "check custom-sql-result-select";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.dataset.customSqlResultIndex = String(index);
+          checkbox.setAttribute("aria-label", `Select output from ${result.instance}, database ${result.database}`);
+          label.append(checkbox, document.createTextNode("Select"));
+          actions.append(label);
+        }
+        const downloadOne = document.createElement("button");
+        downloadOne.className = "secondary";
+        downloadOne.type = "button";
+        downloadOne.dataset.customSqlDownloadIndex = String(index);
+        downloadOne.textContent = "Download this output";
+        downloadOne.disabled = !result.succeeded;
+        actions.append(downloadOne);
+        header.append(heading, actions);
+        section.append(header);
+
+        if (result.succeeded) {
+          const tableContainer = document.createElement("div");
+          tableContainer.className = "table-wrap";
+          renderCustomSqlResults(result.rows || [], result.columns || [], tableContainer);
+          section.append(tableContainer);
+        } else {
+          const message = document.createElement("div");
+          message.className = "error";
+          message.textContent = result.error || "The query failed on this SQL instance.";
+          section.append(message);
+        }
+        container.append(section);
+      });
+      updateCustomSqlExportControls();
+    }
+
+    function customSqlExportText(value) {
+      if (value === null || value === undefined) return "";
+      return typeof value === "object" ? JSON.stringify(value) : String(value);
+    }
+
+    function customSqlSpreadsheetSafeText(value) {
+      const text = customSqlExportText(value);
+      return /^[\s]*[=+\-@]/.test(text) ? `'${text}` : text;
+    }
+
+    function customSqlDelimitedExport(resultSets, delimiter) {
+      const headers = ["SQL Instance", "Database", "Execution Status", "Execution Error"];
+      const usedHeaders = new Set(headers);
+      const sourceColumns = [];
+      for (const result of resultSets) {
+        for (const column of result.columns || []) {
+          const source = String(column);
+          if (sourceColumns.some((entry) => entry.source === source)) continue;
+          let header = source || "Column";
+          let suffix = 2;
+          while (usedHeaders.has(header)) header = `${source || "Column"} (${suffix++})`;
+          usedHeaders.add(header);
+          sourceColumns.push({ source, header });
+          headers.push(header);
+        }
+      }
+      const encode = (value) => {
+        const text = customSqlSpreadsheetSafeText(value);
+        if (delimiter === "\t") return text.replace(/\\/g, "\\\\").replace(/\t/g, "\\t").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+        return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+      };
+      const lines = [headers.map(encode).join(delimiter)];
+      for (const result of resultSets) {
+        const rows = result.succeeded && result.rows?.length ? result.rows : [{}];
+        for (const row of rows) {
+          const values = [
+            result.instance,
+            result.database,
+            result.succeeded ? "Succeeded" : "Failed",
+            result.error || "",
+            ...sourceColumns.map(({ source }) => row[source] ?? "")
+          ];
+          lines.push(values.map(encode).join(delimiter));
+        }
+      }
+      return `\uFEFF${lines.join("\r\n")}\r\n`;
+    }
+
+    function customSqlXmlExport(resultSets) {
+      const xmlDocument = document.implementation.createDocument("", "CustomSqlResults");
+      const root = xmlDocument.documentElement;
+      root.setAttribute("exportedAt", new Date().toISOString());
+      for (const result of resultSets) {
+        const resultNode = xmlDocument.createElement("Result");
+        resultNode.setAttribute("instance", String(result.instance ?? ""));
+        resultNode.setAttribute("database", String(result.database ?? ""));
+        resultNode.setAttribute("succeeded", String(Boolean(result.succeeded)));
+        resultNode.setAttribute("rowCount", String(result.rowCount ?? 0));
+        if (result.error) {
+          const errorNode = xmlDocument.createElement("Error");
+          errorNode.textContent = String(result.error);
+          resultNode.append(errorNode);
+        }
+        const rowsNode = xmlDocument.createElement("Rows");
+        for (const row of result.rows || []) {
+          const rowNode = xmlDocument.createElement("Row");
+          for (const column of result.columns || []) {
+            const valueNode = xmlDocument.createElement("Column");
+            valueNode.setAttribute("name", String(column));
+            valueNode.textContent = customSqlExportText(row[column]);
+            rowNode.append(valueNode);
+          }
+          rowsNode.append(rowNode);
+        }
+        resultNode.append(rowsNode);
+        root.append(resultNode);
+      }
+      return `<?xml version="1.0" encoding="UTF-8"?>\r\n${new XMLSerializer().serializeToString(xmlDocument)}`;
+    }
+
+    function downloadCustomSqlOutputs(resultSets, purpose) {
+      if (!resultSets.length) return;
+      const format = $("custom-sql-export-format").value;
+      const extensions = { csv: "csv", json: "json", tsv: "tsv", xml: "xml" };
+      const mimeTypes = {
+        csv: "text/csv;charset=utf-8",
+        json: "application/json;charset=utf-8",
+        tsv: "text/tab-separated-values;charset=utf-8",
+        xml: "application/xml;charset=utf-8"
+      };
+      const content = format === "json"
+        ? JSON.stringify({ exportedAt: new Date().toISOString(), resultCount: resultSets.length, results: resultSets }, null, 2)
+        : format === "xml"
+        ? customSqlXmlExport(resultSets)
+        : customSqlDelimitedExport(resultSets, format === "tsv" ? "\t" : ",");
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `custom-sql-${purpose}-${timestamp}.${extensions[format]}`;
+      downloadReportingFile(filename, content, mimeTypes[format]);
     }
 
     function updateStartButton() {
@@ -2031,7 +2509,7 @@
           input.dataset.pairIndex = index;
           input.dataset.field = key;
           input.value = pair[key];
-          input.disabled = Boolean(pair.validationRunning);
+          input.disabled = Boolean(pair.validationRunning || pair.readinessRunning);
           input.setAttribute("list", key === "BackupPath" ? "history-paths" : "history-servers");
           input.autocomplete = "off";
           input.placeholder = key === "BackupPath" ? "\\\\backup-server\\sql-migrations\\instance" :
@@ -2047,7 +2525,7 @@
         modeSelect.id = modeLabel.htmlFor;
         modeSelect.dataset.pairIndex = index;
         modeSelect.dataset.mode = "MigrationMode";
-        modeSelect.disabled = Boolean(pair.validationRunning);
+        modeSelect.disabled = Boolean(pair.validationRunning || pair.readinessRunning);
         for (const [value, text] of [
           ["Full", "Full database (schema + data)"],
           ["SchemaOnly", "Schema only (no table data)"]
@@ -2068,23 +2546,32 @@
         validate.className = "secondary";
         validate.dataset.action = "validate-pair";
         validate.dataset.pairIndex = String(index);
-        validate.disabled = Boolean(pair.validationRunning);
+        validate.disabled = Boolean(pair.validationRunning || pair.readinessRunning);
         validate.textContent = pair.validationRunning ? "Validating…" : "Validate pair";
         actions.append(validate);
         const discover = document.createElement("button");
         discover.type = "button";
         discover.dataset.action = "discover";
         discover.dataset.pairIndex = index;
-        discover.disabled = Boolean(pair.validationRunning);
+        discover.disabled = Boolean(pair.validationRunning || pair.readinessRunning);
         discover.textContent = pair.databases ? "Refresh discovery" : "Discover databases";
         actions.append(discover);
+        const readiness = document.createElement("button");
+        readiness.type = "button";
+        readiness.className = "secondary";
+        readiness.dataset.action = "assess-readiness";
+        readiness.dataset.pairIndex = String(index);
+        readiness.disabled = Boolean(migrationActive || patchActive || pair.validationRunning || pair.readinessRunning ||
+          !pair.databases?.some((database) => database.Selected));
+        readiness.textContent = pair.readinessRunning ? "Assessing readiness…" : "Assess readiness only";
+        actions.append(readiness);
         if (pairs.length > 1) {
           const remove = document.createElement("button");
           remove.type = "button";
           remove.className = "secondary";
           remove.dataset.action = "remove";
           remove.dataset.pairIndex = index;
-          remove.disabled = Boolean(pair.validationRunning);
+          remove.disabled = Boolean(pair.validationRunning || pair.readinessRunning);
           remove.textContent = "Remove pair";
           actions.append(remove);
         }
@@ -2096,6 +2583,14 @@
         card.append(grid, actions, summary);
         if (pair.validation) card.append(renderPairValidation(pair.validation));
         if (pair.databases) card.append(renderDatabaseTable(pair, index));
+        if (pair.readinessError) {
+          const error = document.createElement("div");
+          error.className = "error";
+          error.setAttribute("role", "alert");
+          error.textContent = pair.readinessError;
+          card.append(error);
+        }
+        if (pair.readinessReport) card.append(renderReadinessReport(pair.readinessReport, index));
         list.append(card);
       });
       $("add-pair").disabled = pairs.length >= 3 || migrationActive || validationActive;
@@ -2507,6 +3002,162 @@
       return wrap;
     }
 
+    function escapeReadinessHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+      })[character]);
+    }
+
+    function getReadinessReportRows(report) {
+      return (report.assessments || []).flatMap((assessment) => (assessment.Findings || []).map((finding) => ({
+        Source: assessment.Source,
+        Target: assessment.Target,
+        Database: assessment.Database,
+        Readiness: assessment.Readiness,
+        Category: finding.Category,
+        Severity: finding.Severity,
+        Check: finding.Check,
+        Status: finding.Status,
+        Details: finding.Details,
+        Recommendation: finding.Recommendation
+      })));
+    }
+
+    function renderReadinessReport(report, pairIndex) {
+      const section = document.createElement("section");
+      section.className = "readiness-report";
+      const header = document.createElement("div");
+      header.className = "readiness-report-header";
+      const titleGroup = document.createElement("div");
+      const title = document.createElement("h4");
+      title.textContent = "Migration readiness assessment";
+      const summary = document.createElement("p");
+      summary.className = "muted";
+      const blocked = Number(report.blockedCount) || 0;
+      const review = Number(report.reviewRequiredCount) || 0;
+      const noBlockers = Number(report.noBlockersCount) || 0;
+      summary.textContent = `${report.databaseCount} database(s) · ${blocked} blocked · ${review} require review · ${noBlockers} with no blockers detected · ${new Date(report.assessedAt).toLocaleString()}`;
+      titleGroup.append(title, summary);
+      const actions = document.createElement("div");
+      actions.className = "readiness-report-actions";
+      for (const [format, label] of [["html", "Download HTML report"], ["csv", "Download CSV"], ["json", "Download JSON"]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "secondary";
+        button.dataset.action = "export-readiness";
+        button.dataset.pairIndex = String(pairIndex);
+        button.dataset.readinessFormat = format;
+        button.textContent = label;
+        actions.append(button);
+      }
+      header.append(titleGroup, actions);
+      section.append(header);
+
+      const disclaimer = document.createElement("p");
+      disclaimer.className = "muted";
+      disclaimer.textContent = "DMA-inspired local checks only. This is not Microsoft DMA and is not exhaustive; candidate code matches may be false positives. No migration or source/target changes were performed.";
+      section.append(disclaimer);
+
+      const tableWrap = document.createElement("div");
+      tableWrap.className = "table-wrap";
+      const table = document.createElement("table");
+      table.className = "readiness-findings";
+      const thead = document.createElement("thead");
+      const headerRow = document.createElement("tr");
+      for (const label of ["Database", "Severity", "Category", "Check", "Status", "Details", "Recommendation"]) {
+        const cell = document.createElement("th");
+        cell.textContent = label;
+        headerRow.append(cell);
+      }
+      thead.append(headerRow);
+      const tbody = document.createElement("tbody");
+      for (const assessment of report.assessments || []) {
+        for (const finding of assessment.Findings || []) {
+          const row = document.createElement("tr");
+          for (const value of [assessment.Database, finding.Severity, finding.Category, finding.Check, finding.Status, finding.Details, finding.Recommendation]) {
+            const cell = document.createElement("td");
+            cell.textContent = value || "";
+            if (value === "Critical") cell.className = "readiness-severity-critical";
+            if (value === "Warning") cell.className = "readiness-severity-warning";
+            row.append(cell);
+          }
+          tbody.append(row);
+        }
+      }
+      table.append(thead, tbody);
+      tableWrap.append(table);
+      section.append(tableWrap);
+      return section;
+    }
+
+    function downloadReadinessReport(report, format) {
+      const rows = getReadinessReportRows(report);
+      const timestamp = new Date(report.assessedAt || Date.now()).toISOString().replace(/[:.]/g, "-");
+      const safeCell = (value) => {
+        const text = customSqlSpreadsheetSafeText(value);
+        return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+      };
+      let content;
+      let contentType;
+      let extension;
+      if (format === "json") {
+        content = JSON.stringify(report, null, 2);
+        contentType = "application/json;charset=utf-8";
+        extension = "json";
+      } else if (format === "csv") {
+        const columns = ["Source", "Target", "Database", "Readiness", "Category", "Severity", "Check", "Status", "Details", "Recommendation"];
+        content = `\uFEFF${[columns, ...rows.map((row) => columns.map((column) => row[column] ?? ""))]
+          .map((line) => line.map(safeCell).join(",")).join("\r\n")}\r\n`;
+        contentType = "text/csv;charset=utf-8";
+        extension = "csv";
+      } else {
+        const renderFinding = (finding) => `<tr>${[
+          finding.Database, finding.Severity, finding.Category, finding.Check, finding.Status, finding.Details, finding.Recommendation
+        ].map((value) => `<td>${escapeReadinessHtml(value)}</td>`).join("")}</tr>`;
+        const tableRows = (report.assessments || []).flatMap((assessment) =>
+          (assessment.Findings || []).map((finding) => renderFinding({ ...finding, Database: assessment.Database }))).join("");
+        content = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Migration readiness report</title><style>body{font:14px/1.5 Segoe UI,Arial,sans-serif;color:#182230;margin:32px}h1{font-size:24px}table{border-collapse:collapse;width:100%;margin-top:20px}th,td{border:1px solid #d8e0e8;padding:8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#f3f6fa}td{max-width:420px}.critical{color:#a52121;font-weight:700}.warning{color:#805300;font-weight:700}.note{padding:12px;background:#f3f6fa;border-left:4px solid #1769aa}</style></head><body><h1>SQL Server migration readiness assessment</h1><p><strong>Source:</strong> ${escapeReadinessHtml(report.source)}<br><strong>Target:</strong> ${escapeReadinessHtml(report.target)}<br><strong>Migration mode:</strong> ${escapeReadinessHtml(report.migrationMode)}<br><strong>Assessed:</strong> ${escapeReadinessHtml(new Date(report.assessedAt).toLocaleString())}</p><p class="note">DMA-inspired local checks only. This is not Microsoft DMA and is not exhaustive. Candidate code matches can be false positives. No migration or source/target changes were performed.</p><p><strong>Summary:</strong> ${Number(report.blockedCount) || 0} blocked; ${Number(report.reviewRequiredCount) || 0} require review; ${Number(report.noBlockersCount) || 0} with no blockers detected.</p><table><thead><tr><th>Database</th><th>Severity</th><th>Category</th><th>Check</th><th>Status</th><th>Details</th><th>Recommendation</th></tr></thead><tbody>${tableRows}</tbody></table><p>Reference: <a href="https://learn.microsoft.com/en-us/previous-versions/sql/dma/dma-overview?view=sql-server-ver16">Microsoft DMA overview (retired)</a>; <a href="https://learn.microsoft.com/en-us/sql/sql-server/azure-arc/migration-assessment?view=sql-server-ver17">Azure Arc migration assessment</a>.</p></body></html>`;
+        contentType = "text/html;charset=utf-8";
+        extension = "html";
+      }
+      downloadReportingFile(`migration-readiness-${timestamp}.${extension}`, content, contentType);
+    }
+
+    async function assessPairReadiness(index) {
+      const pair = pairs[index];
+      const selectedDatabases = (pair.databases || []).filter((database) => database.Selected).map((database) => database.Database);
+      if (!selectedDatabases.length) {
+        pair.readinessError = "Select at least one database to assess.";
+        renderPairs();
+        return;
+      }
+      if (selectedDatabases.length > 100) {
+        pair.readinessError = "Assess no more than 100 databases at a time. Use multiple readiness reports for larger selections.";
+        renderPairs();
+        return;
+      }
+      pair.Source = document.querySelector(`[data-pair-index="${index}"][data-field="Source"]`).value.trim();
+      pair.Target = document.querySelector(`[data-pair-index="${index}"][data-field="Target"]`).value.trim();
+      pair.MigrationMode = document.querySelector(`[data-pair-index="${index}"][data-mode]`).value;
+      pair.readinessReport = null;
+      pair.readinessError = "";
+      pair.readinessRunning = true;
+      renderPairs();
+      try {
+        pair.readinessReport = await api("/api/readiness-assessment", {
+          Pair: { Source: pair.Source, Target: pair.Target, MigrationMode: pair.MigrationMode },
+          Databases: selectedDatabases
+        });
+        const report = pair.readinessReport;
+        pair.summary = `Readiness: ${report.blockedCount} blocked · ${report.reviewRequiredCount} require review · ${report.noBlockersCount} no blockers detected.`;
+      } catch (error) {
+        pair.readinessError = `Readiness assessment failed: ${error.message}`;
+      } finally {
+        pair.readinessRunning = false;
+        renderPairs();
+      }
+    }
+
     async function validatePair(index) {
       const pair = pairs[index];
       pair.Source = document.querySelector(`[data-pair-index="${index}"][data-field="Source"]`).value.trim();
@@ -2646,7 +3297,7 @@
       const table = document.createElement("table");
       const head = document.createElement("thead");
       const sizeHeading = pair.MigrationMode === "SchemaOnly" ? "Source size (not copied)" : "Size";
-      head.innerHTML = `<tr><th>Migrate</th><th>Database</th><th>${sizeHeading}</th><th>Compatibility</th><th>TDE readiness</th><th>Target</th><th>Overwrite existing</th></tr>`;
+      head.innerHTML = `<tr><th>Migrate / assess</th><th>Database</th><th>${sizeHeading}</th><th>Compatibility</th><th>TDE readiness</th><th>Target</th><th>Overwrite existing</th></tr>`;
       const body = document.createElement("tbody");
       if (!pair.databases.length) {
         const row = document.createElement("tr");
@@ -2663,6 +3314,7 @@
         const select = document.createElement("input");
         select.type = "checkbox";
         select.checked = database.Selected;
+        select.disabled = Boolean(pair.readinessRunning);
         select.dataset.pairIndex = pairIndex;
         select.dataset.databaseIndex = databaseIndex;
         select.dataset.action = "select-database";
@@ -2715,6 +3367,8 @@
       pair.Target = document.querySelector(`[data-pair-index="${index}"][data-field="Target"]`).value.trim();
       pair.BackupPath = document.querySelector(`[data-pair-index="${index}"][data-field="BackupPath"]`).value.trim();
       pair.databases = null;
+      pair.readinessReport = null;
+      pair.readinessError = "";
       $("discovery-error").textContent = "";
       pair.summary = "Connecting to SQL Server and collecting inventory…";
       renderPairs();
@@ -2750,6 +3404,8 @@
       pair[fieldName] = input.value;
       pair.databases = null;
       pair.validation = null;
+      pair.readinessReport = null;
+      pair.readinessError = "";
       pair.summary = "Settings changed; run discovery again.";
       const card = input.closest(".pair-card");
       const summary = card.querySelector("[data-summary]");
@@ -2775,10 +3431,45 @@
       const index = Number(button.dataset.pairIndex);
       if (button.dataset.action === "validate-pair") await validatePair(index);
       if (button.dataset.action === "discover") await discoverPair(index);
+      if (button.dataset.action === "assess-readiness") await assessPairReadiness(index);
+      if (button.dataset.action === "export-readiness") {
+        const report = pairs[index]?.readinessReport;
+        if (report) downloadReadinessReport(report, button.dataset.readinessFormat);
+      }
       if (button.dataset.action === "remove") {
         pairs.splice(index, 1);
         renderPairs();
         saveSettings();
+      }
+    });
+
+    $("first-run-setup-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = $("create-first-admin");
+      const username = $("setup-username").value.trim();
+      const password = $("setup-password").value;
+      button.disabled = true;
+      $("setup-error").textContent = "";
+      try {
+        const session = await api("/api/setup", {
+          SetupCode: $("setup-code").value,
+          Username: username,
+          Password: password,
+          PasswordConfirmation: $("setup-password-confirmation").value
+        });
+        $("first-run-setup-form").reset();
+        try {
+          if ($("remember-username").checked) localStorage.setItem(rememberedUsernameKey, username);
+        } catch (_) {}
+        firstRunSetupRequired = false;
+        showApplication(session.authenticated, "Application", session.username);
+      } catch (error) {
+        $("setup-error").textContent = error.message;
+      } finally {
+        $("setup-code").value = "";
+        $("setup-password").value = "";
+        $("setup-password-confirmation").value = "";
+        button.disabled = false;
       }
     });
 
@@ -2823,6 +3514,8 @@
         pair.MigrationMode = target.value;
         pair.databases = null;
         pair.validation = null;
+        pair.readinessReport = null;
+        pair.readinessError = "";
         pair.summary = "Migration mode changed; run discovery again.";
         const card = target.closest(".pair-card");
         const summary = card.querySelector("[data-summary]");
@@ -2835,7 +3528,14 @@
       }
       const pairIndex = Number(target.dataset.pairIndex);
       const databaseIndex = Number(target.dataset.databaseIndex);
-      if (target.dataset.action === "select-database") pairs[pairIndex].databases[databaseIndex].Selected = target.checked;
+      if (target.dataset.action === "select-database") {
+        pairs[pairIndex].databases[databaseIndex].Selected = target.checked;
+        const readinessButton = document.querySelector(`[data-action="assess-readiness"][data-pair-index="${pairIndex}"]`);
+        if (readinessButton) {
+          readinessButton.disabled = Boolean(pairs[pairIndex].readinessRunning) ||
+            !pairs[pairIndex].databases.some((database) => database.Selected);
+        }
+      }
       if (target.dataset.action === "overwrite-database") pairs[pairIndex].databases[databaseIndex].Overwrite = target.checked;
       updateStartButton();
     });
@@ -2942,14 +3642,8 @@
     });
     document.querySelectorAll("[data-option]").forEach((checkbox) =>
       checkbox.addEventListener("change", () => {
-        if (checkbox.dataset.option === "SkipLinkedServers") {
-          const linkedServers = document.querySelector('[data-option="ConfigureLinkedServers"]');
-          if (checkbox.checked) linkedServers.checked = false;
-          linkedServers.disabled = checkbox.checked;
-        }
-        if (checkbox.dataset.option === "ConfigureLinkedServers" || checkbox.dataset.option === "SkipLinkedServers") {
-          const enabled = document.querySelector('[data-option="ConfigureLinkedServers"]').checked &&
-            !document.querySelector('[data-option="SkipLinkedServers"]').checked;
+        if (checkbox.dataset.option === "ConfigureLinkedServers") {
+          const enabled = checkbox.checked;
           $("linked-server-setup").classList.toggle("hidden", !enabled);
           if (!enabled) clearLinkedServerPasswords();
           if (enabled) refreshLinkedServerPairSelector();
@@ -3180,6 +3874,8 @@
         : [];
       $("custom-sql-error").textContent = "";
       $("custom-sql-results").classList.add("hidden");
+      $("custom-sql-export-toolbar").classList.add("hidden");
+      customSqlResultSets = [];
       if (isStandalone && (!standaloneInstanceInfo || standaloneSqlInstance !== standaloneInput)) {
         $("custom-sql-error").textContent = "Validate and discover the individual SQL instance before running a query.";
         return;
@@ -3213,34 +3909,57 @@
           const failed = result.results.filter((item) => !item.succeeded);
           $("custom-sql-status").textContent = `Completed on ${successful.length} of ${result.targetCount} SQL instance(s) in ${result.elapsedMilliseconds} ms.`;
           $("custom-sql-error").textContent = failed.map((item) => `${item.instance}: ${item.error}`).join("\n");
-          const container = $("custom-sql-results");
-          container.classList.remove("hidden");
-          container.replaceChildren();
-          for (const item of result.results) {
-            const section = document.createElement("section");
-            section.style.marginTop = "12px";
-            const heading = `${item.instance} · ${item.database} · ${item.succeeded ? `Success · ${item.rowCount} row(s)` : "Failed"}`;
-            if (item.succeeded) {
-              renderCustomSqlResults(item.rows || [], item.columns || [], section, heading);
-            } else {
-              const title = document.createElement("h3");
-              title.textContent = heading;
-              const message = document.createElement("div");
-              message.className = "error";
-              message.textContent = item.error;
-              section.append(title, message);
-            }
-            container.append(section);
-          }
+          renderCustomSqlOutputSets(result.results);
         } else {
           $("custom-sql-status").textContent = `Execution finished on ${result.instance} (${result.serverRole}) in ${result.elapsedMilliseconds} ms. Rows: ${result.rowCount}`;
-          renderCustomSqlResults(result.rows || [], result.columns || []);
+          renderCustomSqlOutputSets([{
+            instance: result.instance,
+            serverRole: result.serverRole,
+            database: result.database,
+            succeeded: true,
+            error: "",
+            rowCount: result.rowCount,
+            columns: result.columns || [],
+            rows: result.rows || [],
+            elapsedMilliseconds: result.elapsedMilliseconds
+          }]);
         }
       } catch (error) {
         $("custom-sql-status").textContent = "Custom SQL failed.";
         $("custom-sql-error").textContent = error.message;
         $("custom-sql-results").classList.add("hidden");
+        $("custom-sql-export-toolbar").classList.add("hidden");
+        customSqlResultSets = [];
       }
+    });
+
+    $("custom-sql-select-all").addEventListener("change", (event) => {
+      document.querySelectorAll("#custom-sql-results input[data-custom-sql-result-index]").forEach((checkbox) => {
+        checkbox.checked = event.target.checked;
+      });
+      updateCustomSqlExportControls();
+    });
+
+    $("custom-sql-results").addEventListener("change", (event) => {
+      if (event.target.matches("input[data-custom-sql-result-index]")) updateCustomSqlExportControls();
+    });
+
+    $("custom-sql-download-selected").addEventListener("click", () => {
+      const selected = [...document.querySelectorAll("#custom-sql-results input[data-custom-sql-result-index]:checked")]
+        .map((checkbox) => customSqlResultSets[Number(checkbox.dataset.customSqlResultIndex)])
+        .filter(Boolean);
+      downloadCustomSqlOutputs(selected, "selected");
+    });
+
+    $("custom-sql-download-all").addEventListener("click", () => {
+      downloadCustomSqlOutputs(customSqlResultSets, "all");
+    });
+
+    $("custom-sql-results").addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-custom-sql-download-index]");
+      if (!button) return;
+      const result = customSqlResultSets[Number(button.dataset.customSqlDownloadIndex)];
+      if (result?.succeeded) downloadCustomSqlOutputs([result], "result");
     });
 
     $("clear-custom-sql").addEventListener("click", () => {
@@ -3252,6 +3971,8 @@
       $("custom-sql-status").textContent = "";
       $("custom-sql-results").classList.add("hidden");
       $("custom-sql-results").replaceChildren();
+      $("custom-sql-export-toolbar").classList.add("hidden");
+      customSqlResultSets = [];
     });
 
     $("check-disk-usage").addEventListener("click", async () => {
@@ -3358,8 +4079,8 @@
         .map((database) => `${pair.Source} → ${pair.Target}: ${database.Database}`));
       const options = Object.fromEntries([...document.querySelectorAll("[data-option]")]
         .map((checkbox) => [checkbox.dataset.option, checkbox.checked]));
-      if (options.SkipLinkedServers) options.ConfigureLinkedServers = false;
-      const configureLinkedServers = options.ConfigureLinkedServers && !options.SkipLinkedServers;
+      const configureLinkedServers = options.ConfigureLinkedServers;
+      options.SkipLinkedServers = !configureLinkedServers;
       if (configureLinkedServers) {
         const unloadedPair = planPairs.find((planPair) => {
           const pair = pairs.find((item) => item.Source === planPair.Source && item.Target === planPair.Target);
@@ -3676,8 +4397,10 @@
     async function initialize() {
       try {
         const session = await api("/api/session");
+        firstRunSetupRequired = Boolean(session.setupRequired);
         showApplication(session.authenticated, session.authMode, session.username);
       } catch (_) {
+        firstRunSetupRequired = false;
         showApplication(false);
       }
     }

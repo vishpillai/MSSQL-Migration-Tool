@@ -22,7 +22,7 @@ Describe 'Migration web authentication' {
     It 'rejects application passwords shorter than 14 characters' {
         $password = ConvertTo-SecureString 'too-short' -AsPlainText -Force
         { New-MigrationWebPasswordRecord -Username 'migration-admin' -Password $password } |
-            Should -Throw '*at least 14 characters*'
+            Should -Throw '*between 14 and 1024 characters*'
     }
 
     It 'checks Windows identity membership in an AD group or SID' {
@@ -40,6 +40,46 @@ Describe 'Portable web storage paths' {
         $storage.IsPortable | Should -BeTrue
         $storage.AuthPath | Should -Be (Join-Path $TestDrive 'portable\auth\auth.json')
         $storage.LogDirectory | Should -Be (Join-Path $TestDrive 'portable\logs')
+    }
+}
+
+Describe 'Web authentication record persistence' {
+    It 'creates an authentication record atomically for first-run setup' {
+        $authPath = Join-Path $TestDrive 'portable\auth\auth.json'
+        $password = ConvertTo-SecureString 'test-password-1234' -AsPlainText -Force
+        try {
+            $record = New-MigrationWebPasswordRecord -Username 'first-admin' -Password $password
+
+            Save-MigrationWebAuthRecord -Record $record -Path $authPath -PortableMode -CreateOnly
+
+            $saved = Get-Content -LiteralPath $authPath -Raw | ConvertFrom-Json
+            Test-MigrationWebPassword -Record $saved -Username 'first-admin' -Password 'test-password-1234' |
+                Should -BeTrue
+            { Save-MigrationWebAuthRecord -Record $record -Path $authPath -PortableMode -CreateOnly } |
+                Should -Throw
+        }
+        finally {
+            $password.Dispose()
+        }
+    }
+
+    It 'writes standard-mode authentication data with restricted access controls' {
+        $authPath = Join-Path $TestDrive 'standard\auth.json'
+        $password = ConvertTo-SecureString 'test-password-1234' -AsPlainText -Force
+        try {
+            $record = New-MigrationWebPasswordRecord -Username 'first-admin' -Password $password
+
+            Save-MigrationWebAuthRecord -Record $record -Path $authPath -CreateOnly
+
+            $saved = Get-Content -LiteralPath $authPath -Raw | ConvertFrom-Json
+            Test-MigrationWebPassword -Record $saved -Username 'first-admin' -Password 'test-password-1234' |
+                Should -BeTrue
+            (Get-Acl -LiteralPath $authPath).AreAccessRulesProtected | Should -BeTrue
+            (Get-Acl -LiteralPath (Split-Path -Parent $authPath)).AreAccessRulesProtected | Should -BeTrue
+        }
+        finally {
+            $password.Dispose()
+        }
     }
 }
 
@@ -938,7 +978,7 @@ Describe 'Migration reports' {
 }
 
 Describe 'Application installation' {
-    It 'generates a one-time portable password without storing plaintext' {
+    It 'leaves first-run account creation to the browser setup flow' {
         $runningHost = $null
         if ([System.Threading.Mutex]::TryOpenExisting('Global\DbMigrationToolWebHost', [ref]$runningHost)) {
             $runningHost.Dispose()
@@ -961,22 +1001,16 @@ param([string] $HostName, [int] $Port, [switch] $PortableMode, [string] $AppRoot
                 & (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -AppRoot $appRoot 6>&1 |
                     ForEach-Object { $_.ToString() }
             ) -join "`n"
-            $passwordMatch = [regex]::Match($output, 'Password: (?<password>[A-Za-z0-9_-]{43})')
-            $passwordMatch.Success | Should -BeTrue
-
-            $password = $passwordMatch.Groups['password'].Value
             $authPath = Join-Path $appRoot 'portable\auth\auth.json'
-            $authText = Get-Content -LiteralPath $authPath -Raw
-            $authText | Should -Not -Match [regex]::Escape($password)
-            $authRecord = $authText | ConvertFrom-Json
-            Test-MigrationWebPassword -Record $authRecord -Username 'migration-admin' -Password $password |
-                Should -BeTrue
+            $output | Should -Match 'Complete first-run administrator setup in the browser'
+            $output | Should -Not -Match 'Initial portable login|Password:'
+            Test-Path -LiteralPath $authPath | Should -BeFalse
 
             $secondLaunch = @(
                 & (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -AppRoot $appRoot 6>&1 |
                     ForEach-Object { $_.ToString() }
             ) -join "`n"
-            $secondLaunch | Should -Not -Match 'Initial portable login'
+            $secondLaunch | Should -Match 'Complete first-run administrator setup in the browser'
         }
         finally {
             $env:DBMIGRATION_NO_ELEVATE = $previousNoElevate
@@ -1074,6 +1108,102 @@ Describe 'Pair endpoint validation' {
         Should -Invoke Test-DbaPath -ModuleName DbMigration.Discovery -Times 2 -Exactly -ParameterFilter {
             $Path -eq '\\NAS01\SqlBackup'
         }
+    }
+}
+
+Describe 'Migration readiness assessment' {
+    BeforeAll {
+        Import-Module dbatools -ErrorAction Stop
+        Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.Discovery.psm1') -Force
+    }
+
+    BeforeEach {
+        $script:readinessSourceMajor = 16
+        $script:readinessTargetMajor = 17
+        $script:readinessConnectionIndex = 0
+        $script:readinessLegacyModules = $false
+        Mock Connect-DbaInstance -ModuleName DbMigration.Discovery {
+            $script:readinessConnectionIndex++
+            if ($script:readinessConnectionIndex -eq 1) {
+                [pscustomobject]@{ SqlInstance = 'source-sql'; VersionMajor = $script:readinessSourceMajor }
+            }
+            else {
+                [pscustomobject]@{ SqlInstance = 'target-sql'; VersionMajor = $script:readinessTargetMajor }
+            }
+        }
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Discovery {
+            if ($Query -match 'SELECT name, state_desc AS State') { return @() }
+            if ($SqlInstance -eq 'target-sql') {
+                return [pscustomobject]@{ IsFullTextInstalled = $true; FilestreamConfiguredLevel = 2 }
+            }
+            if ($Query -match 'FROM sys\.databases') {
+                return [pscustomobject]@{
+                    DatabaseName = 'application'
+                    State = 'ONLINE'
+                    CompatibilityLevel = 160
+                    RecoveryModel = 'FULL'
+                    IsEncrypted = $false
+                    IsCdcEnabled = $false
+                    IsPublished = $false
+                    IsSubscribed = $false
+                    IsBrokerEnabled = $false
+                    IsTrustworthyOn = $false
+                    IsDbChainingOn = $false
+                }
+            }
+            if ($Query -match 'sys\.fulltext_catalogs') {
+                return [pscustomobject]@{
+                    FullTextCatalogCount = 0
+                    MemoryOptimizedTableCount = 0
+                    FileStreamFileCount = 0
+                    FileTableCount = 0
+                }
+            }
+            if ($Query -match 'sys\.sql_modules') {
+                if ($script:readinessLegacyModules) {
+                    return [pscustomobject]@{ ModuleName = '[dbo].[LegacyProc]'; PatternName = 'Deprecated sp_dboption procedure' }
+                }
+                return @()
+            }
+            throw "Unexpected assessment query: $Query"
+        }
+        Mock Test-MigrationRestoreCapacity -ModuleName DbMigration.Discovery {
+            [pscustomobject]@{ Status = 'Passed'; Message = 'Target has sufficient restore capacity.' }
+        }
+    }
+
+    It 'assesses a selected database without changes and returns structured findings' {
+        $results = @(Get-MigrationReadinessAssessment -Source 'source-sql' -Target 'target-sql' -Databases @('application'))
+
+        $results | Should -HaveCount 1
+        $results[0].Readiness | Should -Be 'No blockers detected'
+        $results[0].SourceVersionMajor | Should -Be 16
+        $results[0].TargetVersionMajor | Should -Be 17
+        @($results[0].Findings | Where-Object { $_.Check -eq 'Database compatibility level' -and $_.Status -eq 'Passed' }).Count | Should -Be 1
+        @($results[0].Findings | Where-Object { $_.Check -eq 'Target restore capacity' -and $_.Status -eq 'Passed' }).Count | Should -Be 1
+        Should -Invoke Test-MigrationRestoreCapacity -ModuleName DbMigration.Discovery -Times 1 -Exactly
+    }
+
+    It 'reports target downgrade as a blocker and stored-module text matches as candidates' {
+        $script:readinessTargetMajor = 15
+        $script:readinessLegacyModules = $true
+
+        $results = @(Get-MigrationReadinessAssessment -Source 'source-sql' -Target 'target-sql' -Databases @('application'))
+
+        $results[0].Readiness | Should -Be 'Blocked'
+        @($results[0].Findings | Where-Object { $_.Check -eq 'Target is older than source' -and $_.Severity -eq 'Critical' }).Count | Should -Be 1
+        @($results[0].Findings | Where-Object { $_.Check -eq 'Deprecated sp_dboption procedure' -and $_.Status -eq 'Candidate reference' }).Count | Should -Be 1
+    }
+
+    It 'does not run the data restore capacity check for schema-only readiness' {
+        Mock Test-MigrationTdeReadiness -ModuleName DbMigration.Discovery {
+            [pscustomobject]@{ Status = 'Passed'; Message = 'Schema-only assessment does not require TDE key transfer.' }
+        }
+
+        $null = Get-MigrationReadinessAssessment -Source 'source-sql' -Target 'target-sql' `
+            -Databases @('application') -MigrationMode SchemaOnly
+
+        Should -Invoke Test-MigrationRestoreCapacity -ModuleName DbMigration.Discovery -Times 0 -Exactly
     }
 }
 

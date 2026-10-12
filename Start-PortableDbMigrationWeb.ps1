@@ -2,8 +2,6 @@
 param(
     [Parameter()][string] $HostName = 'localhost',
     [Parameter()][ValidateRange(1, 65535)][int] $Port = 9080,
-    [Parameter()][string] $Username = 'migration-admin',
-    [Parameter()][string] $Password,
     [Parameter()][string] $AppRoot = $PSScriptRoot
 )
 
@@ -33,19 +31,6 @@ function Get-FreeTcpPort {
 
 Import-Module (Join-Path $AppRoot 'src\DbMigration.WebAuth.psm1') -Force
 
-function New-InitialPortablePassword {
-    $randomBytes = [byte[]]::new(32)
-    $randomNumberGenerator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $randomNumberGenerator.GetBytes($randomBytes)
-    }
-    finally {
-        $randomNumberGenerator.Dispose()
-    }
-
-    [Convert]::ToBase64String($randomBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-}
-
 $existingInstance = $null
 if ([System.Threading.Mutex]::TryOpenExisting('Global\DbMigrationToolWebHost', [ref]$existingInstance)) {
     $existingInstance.Dispose()
@@ -58,9 +43,6 @@ if (-not $isElevated -and -not $env:DBMIGRATION_NO_ELEVATE) {
     Write-Host 'SQL Server patching needs administrator rights; requesting elevation (UAC prompt)...'
     $relaunchArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath,
         '-HostName', $HostName, '-Port', $Port, '-AppRoot', $AppRoot)
-    foreach ($name in @('Username', 'Password')) {
-        if ($PSBoundParameters.ContainsKey($name)) { $relaunchArguments += @("-$name", (Get-Variable -Name $name -ValueOnly)) }
-    }
     try {
         Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $relaunchArguments -Verb RunAs -ErrorAction Stop
         return
@@ -72,18 +54,7 @@ if (-not $isElevated -and -not $env:DBMIGRATION_NO_ELEVATE) {
 $storage = Resolve-MigrationWebStoragePaths -AppRoot $AppRoot -PortableMode
 
 if (-not (Test-Path -LiteralPath $storage.AuthPath -PathType Leaf)) {
-    $null = New-Item -ItemType Directory -Path $storage.AuthDirectory -Force -ErrorAction Stop
-    $generatedPassword = [string]::IsNullOrEmpty($Password)
-    if ($generatedPassword) {
-        $Password = New-InitialPortablePassword
-    }
-    $securePassword = ConvertTo-SecureString -String $Password -AsPlainText -Force
-    $record = New-MigrationWebPasswordRecord -Username $Username -Password $securePassword
-    $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $storage.AuthPath -Encoding utf8
-    if ($generatedPassword) {
-        Write-Host "Initial portable login (shown once; save it securely):`nUsername: $Username`nPassword: $Password"
-    }
-    Write-Host "Portable auth file created at $($storage.AuthPath)"
+    Write-Host 'No application account exists yet. Complete first-run administrator setup in the browser; a one-time setup code will be shown by the web host.'
 }
 
 $selectedPort = Get-FreeTcpPort -PreferredPort $Port
