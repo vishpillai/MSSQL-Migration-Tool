@@ -2036,9 +2036,26 @@ ORDER BY s.name;
                     throw [ArgumentException]::new('SqlInstance is required.')
                 }
                 $sqlInstance = ([string]$body.SqlInstance).Trim()
-                $connection = Connect-DbaInstance -SqlInstance $sqlInstance -ErrorAction Stop
-                $databases = @(Get-MigrationDatabase -SqlInstance $sqlInstance -Configuration $script:WebConfiguration |
-                    Select-Object Name, SizeMB, Compatibility, Status, RecoveryModel)
+                try {
+                    $connection = Connect-DbaInstance -SqlInstance $sqlInstance -ErrorAction Stop
+                    $databases = @(Get-MigrationDatabase -SqlInstance $sqlInstance -Configuration $script:WebConfiguration |
+                        Select-Object Name, SizeMB, Compatibility, Status, RecoveryModel)
+                }
+                catch {
+                    $connectionFailure = $_.Exception.GetBaseException()
+                    Write-WebAuditRecord -Action 'SQL instance discovery failed' -Actor $session.Username `
+                        -Outcome 'Failed' -Details @{
+                            SqlInstance = $sqlInstance
+                            ErrorType = $connectionFailure.GetType().Name
+                        }
+                    $failureMessage = "Could not connect to or read databases from SQL instance '$sqlInstance'. SQL operations run as the Windows identity hosting the web app, not as the signed-in application user. Verify that the host identity can reach this SQL Server and has permission to connect and read database metadata. SQL error: $($connectionFailure.Message)"
+                    Write-WebHostLog -Level Error -Message "SQL instance discovery failed for '$sqlInstance' requested by '$($session.Username)': $($connectionFailure.ToString())"
+                    Send-WebJson -Response $response -StatusCode 502 -Value @{
+                        error = $failureMessage
+                        errorCode = 'SqlInstanceDiscoveryFailed'
+                    }
+                    continue
+                }
                 Write-WebAuditRecord -Action 'SQL instance discovered' -Actor $session.Username -Outcome 'Succeeded' -Details @{
                     SqlInstance = [string]$connection.SqlInstance
                     DatabaseCount = $databases.Count

@@ -1249,7 +1249,18 @@
         cache: "no-store",
         signal
       });
-      const payload = await response.json();
+      const responseText = await response.text();
+      let payload = null;
+      if (responseText) {
+        try {
+          payload = JSON.parse(responseText);
+        } catch {
+          throw new Error(`The server returned an invalid or incomplete JSON response (HTTP ${response.status}). Check the app host log; do not retry a one-time setup until you check whether the account was created.`);
+        }
+      }
+      else if (response.ok) {
+        throw new Error(`The server returned an empty response (HTTP ${response.status}). Check the app host log before retrying this operation.`);
+      }
       if (!response.ok) {
         if (response.status === 404 && path === "/api/admin/reset-logs") {
           throw new Error("The running web host does not include the log-reset endpoint. Fully stop and restart the updated Database Migration web host, then refresh this page.");
@@ -1260,7 +1271,7 @@
         if (response.status === 404 && path === "/api/readiness-assessment") {
           throw new Error("The running web host does not include readiness assessment. Update the installed app files, fully stop and restart the web host, then refresh this page.");
         }
-        throw new Error(payload.error || `Request failed (${response.status})`);
+        throw new Error(payload?.error || `Request failed (${response.status})`);
       }
       return payload;
     }
@@ -3840,6 +3851,19 @@
         firstRunSetupRequired = false;
         showApplication(session.authenticated, "Application", session.username, session);
       } catch (error) {
+        try {
+          const status = await api("/api/session");
+          if (!status.setupRequired) {
+            firstRunSetupRequired = false;
+            showApplication(status.authenticated, status.authMode || "Application", status.username, status);
+            if (!status.authenticated) {
+              $("login-error").textContent = "The first administrator account appears to have been created, but its confirmation response was interrupted. Sign in with the username and password you just chose.";
+            }
+            return;
+          }
+        } catch (_) {
+          // Preserve the original setup error when the host cannot confirm setup status.
+        }
         $("setup-error").textContent = error.message;
       } finally {
         $("setup-code").value = "";
