@@ -3684,12 +3684,12 @@
       const table = document.createElement("table");
       const head = document.createElement("thead");
       const sizeHeading = pair.MigrationMode === "SchemaOnly" ? "Source size (not copied)" : "Size";
-      head.innerHTML = `<tr><th>Migrate / assess</th><th>Database</th><th>${sizeHeading}</th><th>Compatibility</th><th>TDE readiness</th><th>Target</th><th>Overwrite existing</th></tr>`;
+      head.innerHTML = `<tr><th>Migrate / assess</th><th>Source database</th><th>Target database</th><th>${sizeHeading}</th><th>Target compatibility</th><th>TDE readiness</th><th>Target status</th><th>Overwrite existing</th></tr>`;
       const body = document.createElement("tbody");
       if (!pair.databases.length) {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
-        cell.colSpan = 7;
+        cell.colSpan = 8;
         cell.className = "muted";
         cell.textContent = "No eligible databases were discovered.";
         row.append(cell);
@@ -3708,10 +3708,40 @@
         selectCell.append(select);
         const name = document.createElement("td");
         name.textContent = database.Database;
+        const targetNameCell = document.createElement("td");
+        const targetName = document.createElement("input");
+        targetName.type = "text";
+        targetName.maxLength = 128;
+        targetName.required = true;
+        targetName.value = database.TargetDatabase || database.Database;
+        targetName.dataset.pairIndex = pairIndex;
+        targetName.dataset.databaseIndex = databaseIndex;
+        targetName.dataset.action = "target-database";
+        targetName.setAttribute("aria-label", `Target database name for ${database.Database}`);
+        targetNameCell.append(targetName);
         const size = document.createElement("td");
         size.textContent = `${database.SizeGB} GB`;
         const compatibility = document.createElement("td");
-        compatibility.textContent = database.CompatibilityLevel || "";
+        const sourceLevel = Number(database.CompatibilityLevelNumber);
+        const targetLevel = document.createElement("select");
+        targetLevel.dataset.pairIndex = pairIndex;
+        targetLevel.dataset.databaseIndex = databaseIndex;
+        targetLevel.dataset.action = "target-compatibility";
+        targetLevel.setAttribute("aria-label", `Target compatibility level for ${database.Database}`);
+        const keepSourceLevel = document.createElement("option");
+        keepSourceLevel.value = "";
+        keepSourceLevel.textContent = `Keep source${Number.isFinite(sourceLevel) ? ` (${sourceLevel})` : ""}`;
+        targetLevel.append(keepSourceLevel);
+        for (const level of [90, 100, 110, 120, 130, 140, 150, 160, 170]) {
+          if (level < Number(database.TargetMinCompatibilityLevel) ||
+              level > Number(database.TargetMaxCompatibilityLevel)) continue;
+          const option = document.createElement("option");
+          option.value = String(level);
+          option.textContent = String(level);
+          targetLevel.append(option);
+        }
+        targetLevel.value = database.TargetCompatibilityLevel ? String(database.TargetCompatibilityLevel) : "";
+        compatibility.append(targetLevel);
         const tde = document.createElement("td");
         tde.textContent = database.TdeEncrypted === null || database.TdeEncrypted === undefined
           ? `TDE check failed · ${database.TdeMessage || "status unavailable"}`
@@ -3725,22 +3755,24 @@
         tde.title = database.TdeMessage || "";
         if (database.TdePreflight === "Failed") tde.className = "validation-failed";
         const target = document.createElement("td");
-        target.textContent = database.TargetExists ? "Already exists" : "Not present";
-        if (database.TargetExists) target.className = "target-exists";
+        target.dataset.targetStatus = "";
+        const sameTargetName = (targetName.value.trim().toLowerCase() === database.Database.toLowerCase());
+        target.textContent = sameTargetName
+          ? (database.TargetExists ? "Already exists" : "Not present")
+          : "Checked before migration";
+        if (sameTargetName && database.TargetExists) target.className = "target-exists";
         const overwriteCell = document.createElement("td");
-        if (database.TargetExists) {
-          const label = document.createElement("label");
-          label.className = "check";
-          const overwrite = document.createElement("input");
-          overwrite.type = "checkbox";
-          overwrite.checked = database.Overwrite;
-          overwrite.dataset.pairIndex = pairIndex;
-          overwrite.dataset.databaseIndex = databaseIndex;
-          overwrite.dataset.action = "overwrite-database";
-          label.append(overwrite, document.createTextNode(" Replace it"));
-          overwriteCell.append(label);
-        } else overwriteCell.textContent = "—";
-        row.append(selectCell, name, size, compatibility, tde, target, overwriteCell);
+        const label = document.createElement("label");
+        label.className = "check";
+        const overwrite = document.createElement("input");
+        overwrite.type = "checkbox";
+        overwrite.checked = database.Overwrite;
+        overwrite.dataset.pairIndex = pairIndex;
+        overwrite.dataset.databaseIndex = databaseIndex;
+        overwrite.dataset.action = "overwrite-database";
+        label.append(overwrite, document.createTextNode(" Replace if present"));
+        overwriteCell.append(label);
+        row.append(selectCell, name, targetNameCell, size, compatibility, tde, target, overwriteCell);
         body.append(row);
       });
       table.append(head, body);
@@ -3764,7 +3796,13 @@
       button.disabled = true;
       try {
         const result = await api("/api/discover", { Pair: { Source: pair.Source, Target: pair.Target, BackupPath: pair.BackupPath, MigrationMode: pair.MigrationMode } });
-        pair.databases = result.databases.map((database) => ({ ...database, Selected: true, Overwrite: false }));
+        pair.databases = result.databases.map((database) => ({
+          ...database,
+          Selected: true,
+          Overwrite: false,
+          TargetDatabase: database.Database,
+          TargetCompatibilityLevel: ""
+        }));
         const counts = pair.databases[0] || {};
         pair.summary = `${pair.databases.length} database(s) · ${counts.SourceLoginCount || 0} logins · ${counts.SourceLinkedServerCount || 0} linked servers · ${counts.SourceAgentJobCount || 0} Agent jobs`;
       } catch (error) {
@@ -3776,6 +3814,25 @@
     }
 
     $("pair-list").addEventListener("input", (event) => {
+      const targetDatabaseInput = event.target.closest?.('[data-action="target-database"]');
+      if (targetDatabaseInput) {
+        const pair = pairs[Number(targetDatabaseInput.dataset.pairIndex)];
+        const database = pair.databases[Number(targetDatabaseInput.dataset.databaseIndex)];
+        database.TargetDatabase = targetDatabaseInput.value;
+        database.Overwrite = false;
+        const overwrite = targetDatabaseInput.closest("tr")?.querySelector('[data-action="overwrite-database"]');
+        if (overwrite) overwrite.checked = false;
+        const status = targetDatabaseInput.closest("tr")?.querySelector("[data-target-status]");
+        if (status) {
+          const sameName = targetDatabaseInput.value.trim().toLowerCase() === database.Database.toLowerCase();
+          status.textContent = sameName
+            ? (database.TargetExists ? "Already exists" : "Not present")
+            : "Checked before migration";
+          status.classList.toggle("target-exists", sameName && database.TargetExists);
+        }
+        updateStartButton();
+        return;
+      }
       const input = event.target.closest("[data-field]");
       if (!input) return;
       const pair = pairs[Number(input.dataset.pairIndex)];
@@ -3928,6 +3985,11 @@
       }
       const pairIndex = Number(target.dataset.pairIndex);
       const databaseIndex = Number(target.dataset.databaseIndex);
+      if (target.dataset.action === "target-compatibility") {
+        pairs[pairIndex].databases[databaseIndex].TargetCompatibilityLevel = target.value;
+        updateStartButton();
+        return;
+      }
       if (target.dataset.action === "select-database") {
         pairs[pairIndex].databases[databaseIndex].Selected = target.checked;
         const readinessButton = document.querySelector(`[data-action="assess-readiness"][data-pair-index="${pairIndex}"]`);
@@ -4457,10 +4519,36 @@
         MigrationMode: pair.MigrationMode || "Full",
         Databases: pair.databases.filter((database) => database.Selected).map((database) => ({
           Database: database.Database,
+          TargetDatabase: database.TargetDatabase,
+          TargetCompatibilityLevel: database.TargetCompatibilityLevel ? Number(database.TargetCompatibilityLevel) : null,
           Overwrite: database.Overwrite
         }))
       }));
       const selectedCount = planPairs.reduce((sum, pair) => sum + pair.Databases.length, 0);
+      const allowedCompatibilityLevels = [90, 100, 110, 120, 130, 140, 150, 160, 170];
+      for (const pair of planPairs) {
+        const targetNames = new Set();
+        for (const database of pair.Databases) {
+          const targetName = String(database.TargetDatabase || "").trim();
+          if (!targetName || targetName.length > 128 || /[\x00-\x1F\\/:*?"<>|]/.test(targetName)) {
+            $("migration-error").textContent = `Target database name for ${database.Database} must be 1 to 128 characters and cannot contain control characters or \\, /, :, *, ?, ", <, >, or |.`;
+            return;
+          }
+          const normalizedTargetName = targetName.toLowerCase();
+          if (targetNames.has(normalizedTargetName)) {
+            $("migration-error").textContent = `Target database name '${targetName}' is used more than once for ${pair.Target}.`;
+            return;
+          }
+          targetNames.add(normalizedTargetName);
+          if (database.TargetCompatibilityLevel !== null &&
+              (!allowedCompatibilityLevels.includes(database.TargetCompatibilityLevel) ||
+                database.TargetCompatibilityLevel > Number((pairs.find((item) => item.Source === pair.Source && item.Target === pair.Target)
+                  ?.databases.find((item) => item.Database === database.Database) || {}).TargetMaxCompatibilityLevel))) {
+            $("migration-error").textContent = `The selected target compatibility level for ${database.Database} is not supported by ${pair.Target}.`;
+            return;
+          }
+        }
+      }
       const tdeBlocked = pairs.flatMap((pair) => (pair.databases || [])
         .filter((database) => database.Selected && database.TdePreflight === "Failed")
         .map((database) => `${pair.Source} → ${pair.Target}: ${database.Database} — ${database.TdeMessage}`));
@@ -4476,7 +4564,7 @@
       }
       const overwriteList = planPairs.flatMap((pair) => pair.Databases
         .filter((database) => database.Overwrite)
-        .map((database) => `${pair.Source} → ${pair.Target}: ${database.Database}`));
+        .map((database) => `${pair.Source} → ${pair.Target}: ${database.Database} → ${database.TargetDatabase}`));
       const options = Object.fromEntries([...document.querySelectorAll("[data-option]")]
         .map((checkbox) => [checkbox.dataset.option, checkbox.checked]));
       const configureLinkedServers = options.ConfigureLinkedServers;
@@ -4509,9 +4597,15 @@
         confirm: true,
         confirmLabel: "Replace"
       })) return;
-      const pairSummary = planPairs.map((pair) =>
-        `${pair.Source} → ${pair.Target} (${pair.Databases.length} database(s); ${pair.MigrationMode === "SchemaOnly" ? "SCHEMA ONLY, NO TABLE DATA" : "full database"})`)
-        .join("\n");
+      const pairSummary = planPairs.map((pair) => {
+        const changes = pair.Databases.filter((database) =>
+          database.Database.toLowerCase() !== database.TargetDatabase.toLowerCase() || database.TargetCompatibilityLevel !== null);
+        const changeLines = changes.slice(0, 8).map((database) =>
+          `${database.Database} → ${database.TargetDatabase}${database.TargetCompatibilityLevel ? ` · compat ${database.TargetCompatibilityLevel}` : ""}`);
+        if (changes.length > changeLines.length) changeLines.push(`+${changes.length - changeLines.length} more target change(s)`);
+        return `${pair.Source} → ${pair.Target} (${pair.Databases.length} database(s); ${pair.MigrationMode === "SchemaOnly" ? "SCHEMA ONLY, NO TABLE DATA" : "full database"})` +
+          (changeLines.length ? `\n  ${changeLines.join("\n  ")}` : "\n  Source names and compatibility levels preserved.");
+      }).join("\n");
       const linkedServerSummary = configureLinkedServers
         ? `\n\nLinked-server definitions to configure: ${planPairs.reduce((count, pair) => count + pair.LinkedServers.length, 0)}. Existing same-name linked servers on targets are left unchanged; review them separately. Linked-server passwords are sent for this run only and are not persisted.`
         : "";

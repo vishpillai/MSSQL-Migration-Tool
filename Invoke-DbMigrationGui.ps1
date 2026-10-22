@@ -333,6 +333,7 @@ $discoverButton.Add_Click({
         $statusLabel.Text = "Connecting to $($sourceBox.Text)..."
         $form.Refresh()
         Import-Module dbatools -ErrorAction Stop
+        Set-MigrationSqlConnectionSettings -TrustServerCertificate ([bool]$configuration.TrustServerCertificate)
         $discoveryConfiguration = @{
             SourceTargets = @(@{
                 Source = $sourceBox.Text.Trim()
@@ -416,6 +417,7 @@ $startButton.Add_Click({
         $skipExistingDatabases = [System.Collections.Generic.List[string]]::new()
         if ($selectedDatabases.Count -gt 0) {
             Import-Module dbatools -ErrorAction Stop
+            Set-MigrationSqlConnectionSettings -TrustServerCertificate ([bool]$configuration.TrustServerCertificate)
             foreach ($database in $selectedDatabases) {
                 if (-not (Test-MigrationDatabaseExists -SqlInstance $targetBox.Text.Trim() -Database $database)) {
                     continue

@@ -129,6 +129,7 @@ function Invoke-MigrationTrackedDatabaseOperation {
         [Parameter(Mandatory)][string] $Source,
         [Parameter(Mandatory)][string] $Target,
         [Parameter(Mandatory)][string] $Database,
+        [Parameter()][string] $TargetDatabaseName = '',
         [Parameter(Mandatory)][AllowEmptyString()][string] $ProgressPath,
         [Parameter()][string] $BackupDirectory = '',
         [Parameter()][int] $BackupFileCount = 4,
@@ -136,28 +137,34 @@ function Invoke-MigrationTrackedDatabaseOperation {
         [Parameter()][string] $DestinationDataDirectory = '',
         [Parameter()][string] $DestinationLogDirectory = '',
         [Parameter()][bool] $AllowFileCollisionRetry = $false,
+        [Parameter()][bool] $TrustServerCertificate = $true,
         [Parameter(Mandatory)][string] $TransferModulePath
     )
 
     $job = Start-Job -Name "$Operation-$Database" -ArgumentList @(
-        $Operation, $SqlInstance, $Database, $BackupDirectory, $BackupFileCount,
+        $Operation, $SqlInstance, $Database, $TargetDatabaseName, $BackupDirectory, $BackupFileCount,
         (ConvertTo-Json -InputObject $BackupFiles -Compress),
-        $DestinationDataDirectory, $DestinationLogDirectory, $AllowFileCollisionRetry, $TransferModulePath
+        $DestinationDataDirectory, $DestinationLogDirectory, $AllowFileCollisionRetry,
+        $TrustServerCertificate, $TransferModulePath
     ) -ScriptBlock {
         param(
             [string]$JobOperation,
             [string]$JobSqlInstance,
             [string]$JobDatabase,
+            [string]$JobTargetDatabaseName,
             [string]$JobBackupDirectory,
             [int]$JobBackupFileCount,
             [string]$JobBackupFilesJson,
             [string]$JobDestinationDataDirectory,
             [string]$JobDestinationLogDirectory,
             [bool]$JobAllowFileCollisionRetry,
+            [bool]$JobTrustServerCertificate,
             [string]$JobTransferModulePath
         )
 
         Import-Module dbatools -ErrorAction Stop
+        $null = Set-DbatoolsConfig -FullName 'sql.connection.encrypt' -Value $true -ErrorAction Stop
+        $null = Set-DbatoolsConfig -FullName 'sql.connection.trustcert' -Value $JobTrustServerCertificate -ErrorAction Stop
         if ($JobOperation -eq 'Backup') {
             Backup-DbaDatabase -SqlInstance $JobSqlInstance -Database $JobDatabase `
                 -Path $JobBackupDirectory -FileCount $JobBackupFileCount `
@@ -168,8 +175,13 @@ function Invoke-MigrationTrackedDatabaseOperation {
 
         $jobBackupFiles = @(ConvertFrom-Json -InputObject $JobBackupFilesJson -ErrorAction Stop)
         Import-Module $JobTransferModulePath -Force -ErrorAction Stop
+        $restoreDatabaseName = if ([string]::IsNullOrWhiteSpace($JobTargetDatabaseName)) {
+            $JobDatabase
+        } else {
+            $JobTargetDatabaseName
+        }
         Invoke-MigrationSafeRestore -SqlInstance $JobSqlInstance -Path $jobBackupFiles `
-            -DatabaseName $JobDatabase -DestinationDataDirectory $JobDestinationDataDirectory `
+            -DatabaseName $restoreDatabaseName -DestinationDataDirectory $JobDestinationDataDirectory `
             -DestinationLogDirectory $JobDestinationLogDirectory `
             -AllowFileCollisionRetry $JobAllowFileCollisionRetry
     }
@@ -269,22 +281,43 @@ function Invoke-DatabaseMigration {
         [Parameter(Mandatory)][ValidateRange(1, 32)][int] $BackupFileCount,
         [Parameter()][string[]] $OverwriteDatabases = @(),
         [Parameter()][bool] $AllowTargetReplace = $false,
+        [Parameter()][bool] $TrustServerCertificate = $true,
         [Parameter()][string] $ProgressPath = '',
         [Parameter()][string] $ControlPath = ''
     )
 
-    $databaseNames = @($Databases | ForEach-Object { $_.Name })
-    if ($databaseNames.Count -eq 0) {
+    $databasePlans = @($Databases | ForEach-Object {
+        $sourceDatabase = [string]$_.Name
+        $targetDatabaseName = if ($_.PSObject.Properties.Name -contains 'TargetDatabaseName' -and $_.TargetDatabaseName) {
+            [string]$_.TargetDatabaseName
+        } else {
+            $sourceDatabase
+        }
+        $targetCompatibilityLevel = if ($_.PSObject.Properties.Name -contains 'TargetCompatibilityLevel') {
+            $_.TargetCompatibilityLevel
+        } else {
+            $null
+        }
+        [pscustomobject]@{
+            SourceDatabase = $sourceDatabase
+            TargetDatabase = $targetDatabaseName
+            TargetCompatibilityLevel = $targetCompatibilityLevel
+        }
+    })
+    if ($databasePlans.Count -eq 0) {
         return
     }
 
-    $databaseNames | ForEach-Object -Parallel {
+    $databasePlans | ForEach-Object -Parallel {
         Import-Module $using:ModulePath -Force
         Import-Module $using:TransferModulePath -Force
         Import-Module dbatools -ErrorAction Stop
+        Set-MigrationSqlConnectionSettings -TrustServerCertificate $using:TrustServerCertificate
         $source = $using:Pair.Source
         $target = $using:Pair.Target
-        $database = $_
+        $database = $_.SourceDatabase
+        $targetDatabase = $_.TargetDatabase
+        $targetCompatibilityLevel = $_.TargetCompatibilityLevel
         $statePath = $using:StatePath
         $runBackupDirectory = $using:Pair.BackupPath
         $destinationDataDirectory = $using:DestinationDataDirectory
@@ -304,8 +337,15 @@ function Invoke-DatabaseMigration {
             $stateKey = Get-MigrationStateKey -Source $source -Target $target -Database $database
             $entry = $state.Databases[$stateKey]
             $completedStateNeedsRepair = $false
-            $targetDatabaseExists = Test-MigrationDatabaseExists -SqlInstance $target -Database $database
-            if ($entry -and $entry.Status -eq 'Completed') {
+            $targetDatabaseExists = Test-MigrationDatabaseExists -SqlInstance $target -Database $targetDatabase
+            $stateTargetDatabase = if ($entry -and $entry.TargetDatabase) {
+                [string]$entry.TargetDatabase
+            } else {
+                [string]$database
+            }
+            $entryMatchesTarget = $entry -and [string]::Equals(
+                $stateTargetDatabase, $targetDatabase, [StringComparison]::OrdinalIgnoreCase)
+            if ($entryMatchesTarget -and $entry.Status -eq 'Completed') {
                 $overwriteApproved = $using:AllowTargetReplace -or $database -in $using:OverwriteDatabases
                 if ($targetDatabaseExists -and -not $overwriteApproved) {
                     [pscustomobject]@{ Source = $source; Target = $target; Database = $database; Stage = 'Database'; Status = 'Skipped'; BackupPath = $entry.BackupPath; Message = 'Already completed and present on target.' }
@@ -352,14 +392,16 @@ function Invoke-DatabaseMigration {
                 }
                 Invoke-MigrationTrackedDatabaseOperation -Operation Backup -SqlInstance $source `
                     -Source $source -Target $target -Database $database -ProgressPath $progressPath -BackupDirectory $databaseBackupDirectory `
-                    -BackupFileCount $backupFileCount -TransferModulePath $using:TransferModulePath
+                    -BackupFileCount $backupFileCount -TrustServerCertificate $using:TrustServerCertificate `
+                    -TransferModulePath $using:TransferModulePath
                 $stripeFiles = @(Get-MigrationBackupStripeFiles -Directory $databaseBackupDirectory `
                     -Database $database -FileCount $backupFileCount)
                 if ($stripeFiles.Count -ne $backupFileCount) {
                     $totalBackupFiles = @(Get-ChildItem -LiteralPath $databaseBackupDirectory -Filter '*.bak' -File).Count
                     throw "Backup for '$database' did not produce exactly $backupFileCount valid stripe files in '$databaseBackupDirectory'; found $($stripeFiles.Count) valid stripe file(s) among $totalBackupFiles backup file(s)."
                 }
-                Set-MigrationState -Path $statePath -Source $source -Target $target -Database $database -Status BackupCompleted -BackupPath $backupPath
+                Set-MigrationState -Path $statePath -Source $source -Target $target -Database $database `
+                    -TargetDatabase $targetDatabase -Status BackupCompleted -BackupPath $backupPath
                 $backupCompleted = $true
                 if ($progressPath) {
                     Write-MigrationProgressEvent -ProgressPath $progressPath -Source $source -Target $target `
@@ -383,27 +425,35 @@ function Invoke-DatabaseMigration {
                     -Database $database -Stage 'Restore' -Status 'Started' -Message 'Restoring database to target.'
             }
             Invoke-MigrationTrackedDatabaseOperation -Operation Restore -SqlInstance $target `
-                -Source $source -Target $target -Database $database -ProgressPath $progressPath -BackupFiles $restoreFiles `
+                -Source $source -Target $target -Database $database -TargetDatabaseName $targetDatabase `
+                -ProgressPath $progressPath -BackupFiles $restoreFiles `
                 -DestinationDataDirectory $destinationDataDirectory `
                 -DestinationLogDirectory $destinationLogDirectory `
                 -AllowFileCollisionRetry $allowFileCollisionRetry `
+                -TrustServerCertificate $using:TrustServerCertificate `
                 -TransferModulePath $using:TransferModulePath
-            if (-not (Test-MigrationDatabaseExists -SqlInstance $target -Database $database)) {
-                throw "Restore completed without making database '$database' visible on target '$target'."
+            if ($null -ne $targetCompatibilityLevel) {
+                Set-MigrationTargetCompatibilityLevel -SqlInstance $target -DatabaseName $targetDatabase `
+                    -CompatibilityLevel ([int]$targetCompatibilityLevel)
             }
-            Set-MigrationState -Path $statePath -Source $source -Target $target -Database $database -Status Completed -BackupPath $backupPath
+            if (-not (Test-MigrationDatabaseExists -SqlInstance $target -Database $targetDatabase)) {
+                throw "Restore completed without making database '$targetDatabase' visible on target '$target'."
+            }
+            Set-MigrationState -Path $statePath -Source $source -Target $target -Database $database `
+                -TargetDatabase $targetDatabase -Status Completed -BackupPath $backupPath
             $message = if ($completedStateNeedsRepair) { 'Target database was missing; restored from backup.' } else { 'Backup and restore completed.' }
             if ($progressPath) {
                 Write-MigrationProgressEvent -ProgressPath $progressPath -Source $source -Target $target `
                     -Database $database -Stage 'Restore' -Status 'Completed' -Message 'Target database is online and accessible.'
             }
-            [pscustomobject]@{ Source = $source; Target = $target; Database = $database; Stage = 'Database'; Status = 'Completed'; BackupPath = $backupPath; Message = $message }
+            [pscustomobject]@{ Source = $source; Target = $target; Database = $database; TargetDatabase = $targetDatabase; Stage = 'Database'; Status = 'Completed'; BackupPath = $backupPath; Message = $message }
         }
         catch {
             $migrationError = $_.Exception.Message
             try {
                 $stateStatus = if ($backupCompleted) { 'BackupCompleted' } else { 'Failed' }
-                Set-MigrationState -Path $statePath -Source $source -Target $target -Database $database -Status $stateStatus -BackupPath $backupPath -ErrorMessage $migrationError
+                Set-MigrationState -Path $statePath -Source $source -Target $target -Database $database `
+                    -TargetDatabase $targetDatabase -Status $stateStatus -BackupPath $backupPath -ErrorMessage $migrationError
             }
             catch {
                 Write-Error "Migration failed and state could not be recorded for $source/$database -> $target`: $($_.Exception.Message)"
@@ -422,6 +472,8 @@ function Invoke-DatabaseSchemaOnlyMigration {
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary] $Pair,
         [Parameter(Mandatory)][string] $Database,
+        [Parameter()][string] $TargetDatabaseName = '',
+        [Parameter()][Nullable[int]] $TargetCompatibilityLevel,
         [Parameter(Mandatory)][bool] $Overwrite,
         [Parameter()][string] $ProgressPath = '',
         [Parameter()][string] $ControlPath = ''
@@ -437,6 +489,10 @@ function Invoke-DatabaseSchemaOnlyMigration {
 
     $destinationServer = $null
     $targetDatabaseCreated = $false
+    if ([string]::IsNullOrWhiteSpace($TargetDatabaseName)) {
+        $TargetDatabaseName = $Database
+    }
+    $TargetDatabaseName = ConvertTo-MigrationTargetDatabaseName -DatabaseName $TargetDatabaseName
     try {
         $null = & $emit 'SchemaTransfer' 'Started' 0 'Preparing a schema-only database transfer; table data will not be copied.'
         if (-not (Wait-MigrationControl -ControlPath $ControlPath -ProgressPath $ProgressPath `
@@ -456,13 +512,13 @@ function Invoke-DatabaseSchemaOnlyMigration {
         $null = & $emit 'SchemaTransfer' 'InProgress' 10 'Connected to the source and verified that the database is online.'
 
         $destinationServer = Connect-DbaInstance -SqlInstance $Pair.Target -ErrorAction Stop
-        $destinationDatabase = Get-DbaDatabase -SqlInstance $destinationServer -Database $Database -EnableException -ErrorAction Stop |
+        $destinationDatabase = Get-DbaDatabase -SqlInstance $destinationServer -Database $TargetDatabaseName -EnableException -ErrorAction Stop |
             Select-Object -First 1
         if ($destinationDatabase -and -not $Overwrite) {
-            $message = 'Target database already exists; schema-only replacement was not approved, so it was left unchanged.'
+            $message = "Target database '$TargetDatabaseName' already exists; schema-only replacement was not approved, so it was left unchanged."
             $null = & $emit 'SchemaTransfer' 'Skipped' 100 $message
             return [pscustomobject]@{
-                Source = $Pair.Source; Target = $Pair.Target; Database = $Database; Stage = 'SchemaTransfer'
+                Source = $Pair.Source; Target = $Pair.Target; Database = $Database; TargetDatabase = $TargetDatabaseName; Stage = 'SchemaTransfer'
                 Status = 'Skipped'; BackupPath = $null; Message = $message
             }
         }
@@ -474,7 +530,7 @@ function Invoke-DatabaseSchemaOnlyMigration {
 
         $transfer = [Microsoft.SqlServer.Management.Smo.Transfer]::new($sourceDatabase)
         $transfer.DestinationServerConnection = $destinationServer.ConnectionContext.Copy()
-        $transfer.DestinationDatabase = $Database
+        $transfer.DestinationDatabase = $TargetDatabaseName
         $transfer.CreateTargetDatabase = $false
         $transfer.CopySchema = $true
         $transfer.CopyData = $false
@@ -506,10 +562,10 @@ function Invoke-DatabaseSchemaOnlyMigration {
 
         if ($destinationDatabase) {
             $null = & $emit 'SchemaTransfer' 'InProgress' 40 'Explicit overwrite approved; removing the existing target database before recreating schema only.'
-            Remove-DbaDatabase -SqlInstance $destinationServer -Database $Database -Confirm:$false -EnableException -ErrorAction Stop
+            Remove-DbaDatabase -SqlInstance $destinationServer -Database $TargetDatabaseName -Confirm:$false -EnableException -ErrorAction Stop
         }
         $schemaFileSuffix = '_migration_' + [guid]::NewGuid().ToString('N').Substring(0, 12)
-        $null = New-DbaDatabase -SqlInstance $destinationServer -Name $Database `
+        $null = New-DbaDatabase -SqlInstance $destinationServer -Name $TargetDatabaseName `
             -Collation $sourceDatabase.Collation -RecoveryModel $sourceDatabase.RecoveryModel `
             -DataFileSuffix $schemaFileSuffix -LogFileSuffix ($schemaFileSuffix + '_log') `
             -EnableException -ErrorAction Stop
@@ -518,13 +574,20 @@ function Invoke-DatabaseSchemaOnlyMigration {
             "Created an empty target database with unique file names ($schemaFileSuffix); applying schema without table data."
 
         $null = $transfer.TransferData()
+        $compatibilityLevel = if ($null -ne $TargetCompatibilityLevel) {
+            [int]$TargetCompatibilityLevel
+        } else {
+            [int]$sourceDatabase.CompatibilityLevel
+        }
+        Set-MigrationTargetCompatibilityLevel -SqlInstance $Pair.Target -DatabaseName $TargetDatabaseName `
+            -CompatibilityLevel $compatibilityLevel
         $null = & $emit 'SchemaTransfer' 'InProgress' 90 'Schema transfer completed; verifying target accessibility and absence of table rows.'
-        $targetDatabase = Get-DbaDatabase -SqlInstance $destinationServer -Database $Database -EnableException -ErrorAction Stop |
+        $targetDatabase = Get-DbaDatabase -SqlInstance $destinationServer -Database $TargetDatabaseName -EnableException -ErrorAction Stop |
             Select-Object -First 1
         if (-not $targetDatabase -or $targetDatabase.Status -ne 'Normal') {
-            throw "Schema transfer did not leave '$Database' online and accessible on '$($Pair.Target)'."
+            throw "Schema transfer did not leave '$TargetDatabaseName' online and accessible on '$($Pair.Target)'."
         }
-        $verification = Invoke-DbaQuery -SqlInstance $destinationServer -Database $Database `
+        $verification = Invoke-DbaQuery -SqlInstance $destinationServer -Database $TargetDatabaseName `
             -Query @'
 SELECT COALESCE(SUM(CONVERT(bigint, p.rows)), 0) AS UserTableRows
 FROM sys.tables AS t
@@ -532,15 +595,15 @@ JOIN sys.partitions AS p ON p.object_id = t.object_id
 WHERE p.index_id IN (0, 1);
 '@ -EnableException -ErrorAction Stop | Select-Object -Last 1
         if (-not $verification -or [long]$verification.UserTableRows -ne 0) {
-            throw "Schema-only verification found table rows in '$Database' on '$($Pair.Target)'."
+            throw "Schema-only verification found table rows in '$TargetDatabaseName' on '$($Pair.Target)'."
         }
-        $objectCount = Invoke-DbaQuery -SqlInstance $destinationServer -Database $Database `
+        $objectCount = Invoke-DbaQuery -SqlInstance $destinationServer -Database $TargetDatabaseName `
             -Query "SELECT COUNT_BIG(*) AS SchemaObjectCount FROM sys.objects WHERE is_ms_shipped = 0;" `
             -EnableException -ErrorAction Stop | Select-Object -Last 1
         $message = "Schema-only transfer completed; copied schema objects without table data. Verified $($objectCount.SchemaObjectCount) user objects and zero user-table rows."
         $null = & $emit 'SchemaTransfer' 'Completed' 100 $message
         [pscustomobject]@{
-            Source = $Pair.Source; Target = $Pair.Target; Database = $Database; Stage = 'SchemaTransfer'
+            Source = $Pair.Source; Target = $Pair.Target; Database = $Database; TargetDatabase = $TargetDatabaseName; Stage = 'SchemaTransfer'
             Status = 'Completed'; BackupPath = $null; Message = $message
         }
     }
@@ -557,7 +620,7 @@ WHERE p.index_id IN (0, 1);
         $message = $errorMessages -join ' -> '
         if ($targetDatabaseCreated) {
             try {
-                Remove-DbaDatabase -SqlInstance $destinationServer -Database $Database `
+                Remove-DbaDatabase -SqlInstance $destinationServer -Database $TargetDatabaseName `
                     -Confirm:$false -EnableException -ErrorAction Stop
                 $message += ' The incomplete target database created by this run was removed.'
             }
@@ -567,7 +630,7 @@ WHERE p.index_id IN (0, 1);
         }
         $null = & $emit 'SchemaTransfer' 'Failed' 100 $message
         [pscustomobject]@{
-            Source = $Pair.Source; Target = $Pair.Target; Database = $Database; Stage = 'SchemaTransfer'
+            Source = $Pair.Source; Target = $Pair.Target; Database = $Database; TargetDatabase = $TargetDatabaseName; Stage = 'SchemaTransfer'
             Status = 'Failed'; BackupPath = $null; Message = $message
         }
     }

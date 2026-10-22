@@ -38,6 +38,7 @@ foreach ($moduleName in @(
 Import-Module dbatools -ErrorAction Stop
 
 $configuration = Import-MigrationConfiguration -Path $ConfigPath
+Set-MigrationSqlConnectionSettings -TrustServerCertificate ([bool]$configuration.TrustServerCertificate)
 foreach ($property in @('OutputPath', 'LinkedServersCsv')) {
     if (-not [System.IO.Path]::IsPathRooted($configuration[$property])) {
         $configuration[$property] = Join-Path $PSScriptRoot $configuration[$property]
@@ -126,24 +127,37 @@ foreach ($pair in $configuration.SourceTargets) {
                         $previousBackupDirectories.Add($previousBackupDirectory)
                     }
                 }
-                $targetExists = Test-MigrationDatabaseExists -SqlInstance $pair.Target -Database $database.Name
-                $stateStatus = if ($stateEntry) { [string]$stateEntry.Status } else { '' }
+                $targetSettings = Get-MigrationDatabaseTargetSettings -SourceDatabase $database.Name `
+                    -Mappings @($configuration.DatabaseTargetMappings)
+                $targetDatabaseName = [string]$targetSettings.TargetDatabase
+                $targetExists = Test-MigrationDatabaseExists -SqlInstance $pair.Target -Database $targetDatabaseName
+                $stateTargetDatabase = if ($stateEntry -and $stateEntry.TargetDatabase) {
+                    [string]$stateEntry.TargetDatabase
+                } else {
+                    [string]$database.Name
+                }
+                $stateStatus = if ($stateEntry -and [string]::Equals(
+                    $stateTargetDatabase, $targetDatabaseName, [StringComparison]::OrdinalIgnoreCase)) {
+                    [string]$stateEntry.Status
+                } else {
+                    ''
+                }
                 $targetDecision = Get-MigrationTargetDatabaseDecision -Database $database.Name `
                     -TargetExists $targetExists -StateStatus $stateStatus -Configuration $configuration
                 if ($targetDecision -eq 'SkipRequested') {
                     $pairResults += [pscustomobject]@{
-                        Source = $pair.Source; Target = $pair.Target; Database = $database.Name; Stage = 'Database'
-                        Status = 'Skipped'; BackupPath = $null; Message = 'Overwrite declined in GUI; existing target database was left unchanged.'
+                        Source = $pair.Source; Target = $pair.Target; Database = $database.Name; TargetDatabase = $targetDatabaseName; Stage = 'Database'
+                        Status = 'Skipped'; BackupPath = $null; Message = "Overwrite declined; existing target database '$targetDatabaseName' was left unchanged."
                     }
                     if ($ProgressPath) {
                         Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
-                            -Database $database.Name -Stage 'Database' -Status 'Skipped' -Message 'Overwrite declined; existing target database left unchanged.'
+                            -Database $database.Name -Stage 'Database' -Status 'Skipped' -Message "Overwrite declined; existing target database '$targetDatabaseName' left unchanged."
                     }
                     continue
                 }
                 if ($targetDecision -eq 'SkipCompleted') {
                     $pairResults += [pscustomobject]@{
-                        Source = $pair.Source; Target = $pair.Target; Database = $database.Name; Stage = 'Database'
+                        Source = $pair.Source; Target = $pair.Target; Database = $database.Name; TargetDatabase = $targetDatabaseName; Stage = 'Database'
                         Status = 'Skipped'; BackupPath = $stateEntry.BackupPath; Message = 'Completed state verified against accessible target database.'
                     }
                     if ($ProgressPath) {
@@ -204,6 +218,9 @@ foreach ($pair in $configuration.SourceTargets) {
                         -Database $database.Name -Stage 'CapacityPreflight' -Status $capacityStatus -Message $capacity.Message
                 }
                 if ($capacity.Status -eq 'Passed') {
+                    $database | Add-Member -NotePropertyName TargetDatabaseName -NotePropertyValue $targetDatabaseName -Force
+                    $database | Add-Member -NotePropertyName TargetCompatibilityLevel `
+                        -NotePropertyValue $targetSettings.TargetCompatibilityLevel -Force
                     $eligibleDatabases.Add($database)
                 }
             }
@@ -227,6 +244,7 @@ foreach ($pair in $configuration.SourceTargets) {
                 -StatePath $StatePath -ThrottleLimit $configuration.ThrottleLimit `
                 -ModulePath (Join-Path $moduleDirectory 'DbMigration.Core.psm1') `
                 -TransferModulePath (Join-Path $moduleDirectory 'DbMigration.Transfer.psm1') `
+                -TrustServerCertificate ([bool]$configuration.TrustServerCertificate) `
                 -DestinationDataDirectory $targetPaths.Data -DestinationLogDirectory $targetPaths.Log `
                 -BackupFileCount ([int]$configuration.BackupFileCount) `
                 -OverwriteDatabases @($configuration.OverwriteExistingDatabases) `
@@ -328,6 +346,11 @@ foreach ($pair in $configuration.SourceTargets) {
     }
 
     foreach ($databaseResult in @($pairResults | Where-Object Status -eq 'Completed')) {
+        $targetDatabaseName = if ($databaseResult.PSObject.Properties.Name -contains 'TargetDatabase' -and $databaseResult.TargetDatabase) {
+            [string]$databaseResult.TargetDatabase
+        } else {
+            [string]$databaseResult.Database
+        }
         try {
             $null = Wait-MigrationControl -ControlPath $ControlPath -ProgressPath $ProgressPath `
                 -Source $pair.Source -Target $pair.Target -Database $databaseResult.Database
@@ -335,11 +358,11 @@ foreach ($pair in $configuration.SourceTargets) {
                 Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
                     -Database $databaseResult.Database -Stage 'PostMigration' -Status 'Started' -Message 'Post-migration actions started.'
             }
-            Invoke-DatabasePostMigration -SqlInstance $pair.Target -Database $databaseResult.Database `
+            Invoke-DatabasePostMigration -SqlInstance $pair.Target -Database $targetDatabaseName `
                 -UpdateStatistics ([bool]$configuration.UpdateStatistics) `
                 -RepairOrphanUsers ([bool]$configuration.RepairOrphanUsers)
             $migrationResults.Add([pscustomobject]@{
-                Source = $pair.Source; Target = $pair.Target; Database = $databaseResult.Database; Stage = 'PostMigration'
+                Source = $pair.Source; Target = $pair.Target; Database = $databaseResult.Database; TargetDatabase = $targetDatabaseName; Stage = 'PostMigration'
                 Status = 'Completed'; BackupPath = $databaseResult.BackupPath; Message = 'Configured post-migration actions completed.'
             })
             if ($ProgressPath) {

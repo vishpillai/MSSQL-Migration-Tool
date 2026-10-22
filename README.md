@@ -51,6 +51,8 @@ Edit `config/migration.config.json`:
 - `BackupFileCount`: number of striped backup files per database; defaults to 4 (valid range 1–32).
 - `RestoreSpaceBufferPercent`: extra free-space buffer required beyond current data/log file allocation before a restore is allowed; defaults to 20%.
 - `AllowTargetReplace`: defaults to `false`; command-line replacement must be explicitly enabled. The GUI instead asks Yes/No for each selected database already on the target; answering No skips that database without changing the target.
+- `TrustServerCertificate`: defaults to `true` for SQL Server connections so trusted internal/self-signed deployments can connect; TLS encryption stays enabled, but certificate identity validation is skipped. Set it to `false` when the SQL Server certificate chains to a trusted CA and its hostname matches the endpoint.
+- `DatabaseTargetMappings`: optional per-database `SourceDatabase`, `TargetDatabase`, and `TargetCompatibilityLevel` values for command-line migrations. Omitted target names preserve the source name; omitted compatibility levels preserve the source level.
 - `OutputPath`: destination for generated HTML and CSV reports.
 - `LinkedServersCsv`: linked-server definition CSV path.
 

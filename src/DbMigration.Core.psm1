@@ -73,6 +73,49 @@ function Import-MigrationConfiguration {
     if ($configuration.AllowTargetReplace -isnot [bool]) {
         throw 'AllowTargetReplace must be true or false.'
     }
+    if (-not $configuration.Contains('TrustServerCertificate')) {
+        $configuration.TrustServerCertificate = $true
+    }
+    if ($configuration.TrustServerCertificate -isnot [bool]) {
+        throw 'TrustServerCertificate must be true or false.'
+    }
+    if (-not $configuration.Contains('DatabaseTargetMappings')) {
+        $configuration.DatabaseTargetMappings = @()
+    }
+    if ($configuration.DatabaseTargetMappings -isnot [array]) {
+        throw 'DatabaseTargetMappings must be an array.'
+    }
+    $mappedSourceNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $mappedTargetNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($mapping in $configuration.DatabaseTargetMappings) {
+        if ($mapping -isnot [System.Collections.IDictionary] -or
+            -not $mapping.Contains('SourceDatabase') -or
+            [string]::IsNullOrWhiteSpace([string]$mapping.SourceDatabase)) {
+            throw 'Each DatabaseTargetMappings entry must provide a SourceDatabase name.'
+        }
+        $mapping.SourceDatabase = ([string]$mapping.SourceDatabase).Trim()
+        $mapping.TargetDatabase = ConvertTo-MigrationTargetDatabaseName -DatabaseName $(
+            if ($mapping.Contains('TargetDatabase')) { [string]$mapping.TargetDatabase }
+            else { [string]$mapping.SourceDatabase }
+        )
+        if (-not $mappedSourceNames.Add([string]$mapping.SourceDatabase)) {
+            throw "DatabaseTargetMappings contains duplicate source database '$($mapping.SourceDatabase)'."
+        }
+        if (-not $mappedTargetNames.Add([string]$mapping.TargetDatabase)) {
+            throw "DatabaseTargetMappings contains duplicate target database '$($mapping.TargetDatabase)'."
+        }
+        if ($mapping.Contains('TargetCompatibilityLevel') -and $null -ne $mapping.TargetCompatibilityLevel) {
+            if ($mapping.TargetCompatibilityLevel -isnot [byte] -and
+                $mapping.TargetCompatibilityLevel -isnot [int] -and
+                $mapping.TargetCompatibilityLevel -isnot [long]) {
+                throw 'TargetCompatibilityLevel must be an integer or null.'
+            }
+            if ([int]$mapping.TargetCompatibilityLevel -notin @(90, 100, 110, 120, 130, 140, 150, 160, 170)) {
+                throw "Unsupported target compatibility level '$($mapping.TargetCompatibilityLevel)'."
+            }
+            $mapping.TargetCompatibilityLevel = [int]$mapping.TargetCompatibilityLevel
+        }
+    }
     foreach ($property in @('OverwriteExistingDatabases', 'SkipExistingDatabases')) {
         if (-not $configuration.Contains($property)) {
             $configuration[$property] = @()
@@ -95,6 +138,87 @@ function Import-MigrationConfiguration {
     }
 
     return $configuration
+}
+
+function Set-MigrationSqlConnectionSettings {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [bool] $TrustServerCertificate
+    )
+
+    if (-not (Get-Command Set-DbatoolsConfig -ErrorAction SilentlyContinue)) {
+        throw 'The dbatools module must be imported before configuring SQL connection settings.'
+    }
+
+    $null = Set-DbatoolsConfig -FullName 'sql.connection.encrypt' -Value $true -ErrorAction Stop
+    $null = Set-DbatoolsConfig -FullName 'sql.connection.trustcert' -Value $TrustServerCertificate -ErrorAction Stop
+}
+
+function Set-MigrationTargetCompatibilityLevel {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $SqlInstance,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $DatabaseName,
+        [Parameter(Mandatory)][int] $CompatibilityLevel
+    )
+
+    $supportedLevels = @(90, 100, 110, 120, 130, 140, 150, 160, 170)
+    if ($CompatibilityLevel -notin $supportedLevels) {
+        throw "Unsupported SQL Server compatibility level '$CompatibilityLevel'."
+    }
+
+    $quotedDatabaseName = '[' + $DatabaseName.Replace(']', ']]') + ']'
+    $escapedDatabaseName = $DatabaseName.Replace("'", "''")
+    $null = Invoke-DbaQuery -SqlInstance $SqlInstance -Database master `
+        -Query "ALTER DATABASE $quotedDatabaseName SET COMPATIBILITY_LEVEL = $CompatibilityLevel;" `
+        -EnableException -ErrorAction Stop
+    $actualLevel = Invoke-DbaQuery -SqlInstance $SqlInstance -Database master -EnableException -ErrorAction Stop `
+        -Query "SELECT compatibility_level AS CompatibilityLevel FROM sys.databases WHERE name = N'$escapedDatabaseName';" |
+        Select-Object -Last 1
+    if (-not $actualLevel -or [int]$actualLevel.CompatibilityLevel -ne $CompatibilityLevel) {
+        throw "Target database '$DatabaseName' did not retain compatibility level $CompatibilityLevel."
+    }
+}
+
+function ConvertTo-MigrationTargetDatabaseName {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $DatabaseName
+    )
+
+    $normalizedName = $DatabaseName.Trim()
+    if ([string]::IsNullOrWhiteSpace($normalizedName) -or $normalizedName.Length -gt 128 -or
+        $normalizedName -match '[\x00-\x1F\\/:*?"<>|]') {
+        throw 'Target database names must be 1 to 128 characters and cannot contain control characters or \\, /, :, *, ?, ", <, >, or |.'
+    }
+
+    return $normalizedName
+}
+
+function Get-MigrationDatabaseTargetSettings {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $SourceDatabase,
+        [Parameter()][object[]] $Mappings = @()
+    )
+
+    $mapping = @($Mappings | Where-Object {
+        [string]::Equals([string]$_.SourceDatabase, $SourceDatabase, [StringComparison]::OrdinalIgnoreCase)
+    }) | Select-Object -First 1
+    if (-not $mapping) {
+        return @{
+            TargetDatabase = $SourceDatabase
+            TargetCompatibilityLevel = $null
+        }
+    }
+
+    return @{
+        TargetDatabase = ConvertTo-MigrationTargetDatabaseName -DatabaseName ([string]$mapping.TargetDatabase)
+        TargetCompatibilityLevel = if ($mapping.Contains('TargetCompatibilityLevel')) {
+            $mapping.TargetCompatibilityLevel
+        } else { $null }
+    }
 }
 
 function Get-MigrationTargetDatabaseDecision {
@@ -626,6 +750,7 @@ function Set-MigrationState {
         [Parameter(Mandatory)][string] $Target,
         [Parameter(Mandatory)][string] $Database,
         [Parameter(Mandatory)][ValidateSet('BackupCompleted', 'Completed', 'Failed')][string] $Status,
+        [Parameter()][string] $TargetDatabase = '',
         [string] $BackupPath,
         [string] $ErrorMessage
     )
@@ -655,6 +780,7 @@ function Set-MigrationState {
             Source = $Source
             Target = $Target
             Database = $Database
+            TargetDatabase = if ([string]::IsNullOrWhiteSpace($TargetDatabase)) { $Database } else { $TargetDatabase }
             Status = $Status
             BackupPath = $BackupPath
             Error = $ErrorMessage
@@ -910,4 +1036,4 @@ function Write-MigrationReports {
     [pscustomobject]@{ CsvPath = $csvPath; HtmlPath = $htmlPath }
 }
 
-Export-ModuleMember -Function Import-MigrationConfiguration, Get-MigrationTargetDatabaseDecision, Get-MigrationSourceTargetPairDefaults, Test-MigrationServerWorkEnabled, Get-MigrationDatabase, Test-MigrationDatabaseExists, Invoke-MigrationCustomSql, Invoke-MigrationCustomSqlBatch, Get-MigrationDiskUsage, Get-MigrationState, Get-MigrationStateKey, Get-MigrationBackupPath, Get-MigrationRunBackupDirectory, Get-MigrationDatabaseBackupDirectory, Get-MigrationBackupStripeFiles, Write-MigrationProgressEvent, Wait-MigrationControl, Remove-MigrationRunBackupDirectory, Set-MigrationState, Write-MigrationReports
+Export-ModuleMember -Function Import-MigrationConfiguration, Set-MigrationSqlConnectionSettings, Set-MigrationTargetCompatibilityLevel, ConvertTo-MigrationTargetDatabaseName, Get-MigrationDatabaseTargetSettings, Get-MigrationTargetDatabaseDecision, Get-MigrationSourceTargetPairDefaults, Test-MigrationServerWorkEnabled, Get-MigrationDatabase, Test-MigrationDatabaseExists, Invoke-MigrationCustomSql, Invoke-MigrationCustomSqlBatch, Get-MigrationDiskUsage, Get-MigrationState, Get-MigrationStateKey, Get-MigrationBackupPath, Get-MigrationRunBackupDirectory, Get-MigrationDatabaseBackupDirectory, Get-MigrationBackupStripeFiles, Write-MigrationProgressEvent, Wait-MigrationControl, Remove-MigrationRunBackupDirectory, Set-MigrationState, Write-MigrationReports

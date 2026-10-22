@@ -43,6 +43,7 @@ Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.Reporting.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'src\DbMigration.WebAuth.psm1') -Force
 Import-Module dbatools -ErrorAction Stop
 $script:WebConfiguration = Import-MigrationConfiguration -Path $fullConfigPath
+Set-MigrationSqlConnectionSettings -TrustServerCertificate ([bool]$script:WebConfiguration.TrustServerCertificate)
 $script:AuthenticationMode = $AuthenticationMode
 $script:WindowsAuthGroup = $WindowsAuthGroup
 $script:AuthRecord = $null
@@ -876,6 +877,7 @@ function Start-WebMigrationPlan {
                 }
             }
         }
+        $targetDatabaseNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         foreach ($database in $pair.Databases) {
             if ($database -isnot [System.Collections.IDictionary] -or
                 -not $database.Contains('Overwrite') -or $database.Overwrite -isnot [bool] -or
@@ -883,9 +885,31 @@ function Start-WebMigrationPlan {
                 throw [ArgumentException]::new('Database selections must include a boolean Overwrite decision.')
             }
             $knownDatabase = @($discovery.Databases | Where-Object { $_.Database -ceq $database.Database }) | Select-Object -First 1
-            if ([bool]$database.Overwrite -and -not [bool]$knownDatabase.TargetExists) {
-                throw [ArgumentException]::new("Overwrite was approved for '$($database.Database)', but discovery did not show an existing target.")
+            $targetDatabaseName = ConvertTo-MigrationTargetDatabaseName -DatabaseName $(
+                if ($database.Contains('TargetDatabase')) { [string]$database.TargetDatabase }
+                else { [string]$database.Database }
+            )
+            if (-not $targetDatabaseNames.Add($targetDatabaseName)) {
+                throw [ArgumentException]::new("Target database name '$targetDatabaseName' is assigned more than once for '$($pair.Target)'.")
             }
+            $targetCompatibilityLevel = $null
+            if ($database.Contains('TargetCompatibilityLevel') -and $null -ne $database.TargetCompatibilityLevel) {
+                if ($database.TargetCompatibilityLevel -isnot [byte] -and
+                    $database.TargetCompatibilityLevel -isnot [int16] -and
+                    $database.TargetCompatibilityLevel -isnot [int32] -and
+                    $database.TargetCompatibilityLevel -isnot [int64]) {
+                    throw [ArgumentException]::new("Target compatibility level for '$($database.Database)' must be an integer or null.")
+                }
+                $targetCompatibilityLevel = [int]$database.TargetCompatibilityLevel
+                if ($targetCompatibilityLevel -notin @(90, 100, 110, 120, 130, 140, 150, 160, 170) -or
+                    $targetCompatibilityLevel -lt [int]$knownDatabase.TargetMinCompatibilityLevel -or
+                    $targetCompatibilityLevel -gt [int]$knownDatabase.TargetMaxCompatibilityLevel) {
+                    throw [ArgumentException]::new("Target compatibility level $targetCompatibilityLevel is not supported by '$($pair.Target)'.")
+                }
+            }
+            $targetExists = Test-MigrationDatabaseExists -SqlInstance $pair.Target -Database $targetDatabaseName
+            $database.TargetDatabase = $targetDatabaseName
+            $database.TargetCompatibilityLevel = $targetCompatibilityLevel
         }
         if ($selectedNames.Count -eq 0 -and -not $serverWork) {
             continue
@@ -896,7 +920,12 @@ function Start-WebMigrationPlan {
             BackupPath = $pair.BackupPath
             MigrationMode = $pair.MigrationMode
             Databases = @($pair.Databases | ForEach-Object {
-                @{ Database = [string]$_.Database; Overwrite = [bool]$_.Overwrite }
+                @{
+                    Database = [string]$_.Database
+                    TargetDatabase = [string]$_.TargetDatabase
+                    TargetCompatibilityLevel = $_.TargetCompatibilityLevel
+                    Overwrite = [bool]$_.Overwrite
+                }
             })
             LinkedServers = @($linkedServerDefinitions)
         })

@@ -162,6 +162,7 @@ Describe 'Migration configuration' {
         $config.SourceTargets[0].MigrationMode | Should -Be 'Full'
         $config.RestoreSpaceBufferPercent | Should -Be 20
         $config.BackupFileCount | Should -Be 4
+        $config.TrustServerCertificate | Should -BeTrue
         $config.UpdateStatistics | Should -BeTrue
         $config.ExcludeDatabases.Count | Should -Be 0
         $config.MigrateLogins | Should -BeTrue
@@ -256,6 +257,21 @@ Describe 'Migration configuration' {
         (Import-MigrationConfiguration -Path $path).AllowTargetReplace | Should -BeFalse
     }
 
+    It 'allows SQL server certificate validation to remain enabled explicitly' {
+        $path = Join-Path $TestDrive 'trusted-certificate.json'
+        @'
+{
+  "SourceTargets": [{"Source":"source","Target":"target","BackupPath":"C:\\backups"}],
+  "OutputPath": "reports",
+  "ThrottleLimit": 2,
+  "LinkedServersCsv": "linked.csv",
+  "TrustServerCertificate": false
+}
+'@ | Set-Content -LiteralPath $path
+
+        (Import-MigrationConfiguration -Path $path).TrustServerCertificate | Should -BeFalse
+    }
+
     It 'requires an explicit per-database decision before replacing an existing target' {
         $config = @{
             AllowTargetReplace = $false
@@ -307,6 +323,93 @@ Describe 'Migration configuration' {
 '@ | Set-Content -LiteralPath $path
 
         { Import-MigrationConfiguration -Path $path } | Should -Throw '*BackupFileCount*'
+    }
+}
+
+Describe 'Target compatibility changes' {
+    It 'quotes the database name and verifies the requested compatibility level' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Core {
+            if ($Query -like 'SELECT compatibility_level*') {
+                return [pscustomobject]@{ CompatibilityLevel = 150 }
+            }
+        }
+
+        Set-MigrationTargetCompatibilityLevel -SqlInstance 'target' -DatabaseName 'Customer]Archive' -CompatibilityLevel 150
+
+        Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.Core -Times 1 -ParameterFilter {
+            $Query -eq 'ALTER DATABASE [Customer]]Archive] SET COMPATIBILITY_LEVEL = 150;'
+        }
+        Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.Core -Times 1 -ParameterFilter {
+            $Query -like 'SELECT compatibility_level*'
+        }
+    }
+
+    It 'rejects unsupported compatibility levels before running SQL' {
+        { Set-MigrationTargetCompatibilityLevel -SqlInstance 'target' -DatabaseName 'Customer' -CompatibilityLevel 155 } |
+            Should -Throw '*Unsupported SQL Server compatibility level*'
+    }
+}
+
+Describe 'Target database name validation' {
+    It 'trims valid names and preserves quoted-identifier characters' {
+        ConvertTo-MigrationTargetDatabaseName -DatabaseName '  Sales]Archive  ' | Should -Be 'Sales]Archive'
+    }
+
+    It 'rejects invalid or overlong SQL Server database names' {
+        { ConvertTo-MigrationTargetDatabaseName -DatabaseName 'Sales/Archive' } | Should -Throw '*Target database names*'
+        { ConvertTo-MigrationTargetDatabaseName -DatabaseName ('x' * 129) } | Should -Throw '*Target database names*'
+    }
+
+        It 'loads a target name and compatibility override from configuration' {
+                $path = Join-Path $TestDrive 'target-mapping.json'
+                @'
+{
+    "SourceTargets": [{"Source":"source","Target":"target","BackupPath":"C:\\backups"}],
+    "OutputPath": "reports",
+    "ThrottleLimit": 2,
+    "LinkedServersCsv": "linked.csv",
+    "DatabaseTargetMappings": [{"SourceDatabase":"Sales","TargetDatabase":"SalesProd","TargetCompatibilityLevel":150}]
+}
+'@ | Set-Content -LiteralPath $path
+
+                $configuration = Import-MigrationConfiguration -Path $path
+                $settings = Get-MigrationDatabaseTargetSettings -SourceDatabase 'sales' `
+                        -Mappings $configuration.DatabaseTargetMappings
+
+                $settings.TargetDatabase | Should -Be 'SalesProd'
+                $settings.TargetCompatibilityLevel | Should -Be 150
+        }
+
+        It 'rejects duplicate target database mappings' {
+                $path = Join-Path $TestDrive 'duplicate-target-mapping.json'
+                @'
+{
+    "SourceTargets": [{"Source":"source","Target":"target","BackupPath":"C:\\backups"}],
+    "OutputPath": "reports",
+    "ThrottleLimit": 2,
+    "LinkedServersCsv": "linked.csv",
+    "DatabaseTargetMappings": [
+        {"SourceDatabase":"Sales","TargetDatabase":"SalesProd"},
+        {"SourceDatabase":"Archive","TargetDatabase":"SalesProd"}
+    ]
+}
+'@ | Set-Content -LiteralPath $path
+
+                { Import-MigrationConfiguration -Path $path } | Should -Throw '*duplicate target database*'
+        }
+
+    It 'resolves optional target name and compatibility settings by source name' {
+        $mappings = @(@{
+            SourceDatabase = 'Sales'
+            TargetDatabase = 'SalesProd'
+            TargetCompatibilityLevel = 150
+        })
+        $settings = Get-MigrationDatabaseTargetSettings -SourceDatabase 'Sales' -Mappings $mappings
+
+        $settings.TargetDatabase | Should -Be 'SalesProd'
+        $settings.TargetCompatibilityLevel | Should -Be 150
+        (Get-MigrationDatabaseTargetSettings -SourceDatabase 'Other' -Mappings $mappings).TargetDatabase |
+            Should -Be 'Other'
     }
 }
 
@@ -777,6 +880,19 @@ Describe 'Migration state' {
         $output.Count | Should -Be 0
         $state.Databases[$key].Status | Should -Be 'BackupCompleted'
         $state.Databases[$key].BackupPath | Should -Be 'C:\backups\appdb.bak'
+        $state.Databases[$key].TargetDatabase | Should -Be 'appdb'
+    }
+
+    It 'records the configured destination database for resume checks' {
+        $path = Join-Path $TestDrive 'renamed-target-state.json'
+        $null = Set-MigrationState -Path $path -Source source -Target target -Database appdb `
+            -TargetDatabase appdb_prod -Status Completed
+
+        $state = Get-MigrationState -Path $path
+        $key = Get-MigrationStateKey -Source source -Target target -Database appdb
+
+        $state.Databases[$key].Database | Should -Be 'appdb'
+        $state.Databases[$key].TargetDatabase | Should -Be 'appdb_prod'
     }
 
     It 'creates distinct keys for different migration endpoints' {
@@ -1335,7 +1451,10 @@ Describe 'Database discovery details' {
             })
         }
         Mock Connect-DbaInstance -ModuleName DbMigration.Discovery {
-            [pscustomobject]@{ ComputerName = if ($SqlInstance -eq 'source') { 'source-host' } else { 'target-host' } }
+            [pscustomobject]@{
+                ComputerName = if ($SqlInstance -eq 'source') { 'source-host' } else { 'target-host' }
+                VersionMajor = if ($SqlInstance -eq 'source') { 15 } else { 16 }
+            }
         }
         Mock Get-DbaDiskSpace -ModuleName DbMigration.Discovery {
             @(
@@ -1386,6 +1505,8 @@ Describe 'Database discovery details' {
         $result.SourceAgentJobCount | Should -Be 3
         $result.CompatibilityLevel | Should -Be 'Version150'
         $result.CompatibilityLevelNumber | Should -Be 150
+        $result.TargetMinCompatibilityLevel | Should -Be 100
+        $result.TargetMaxCompatibilityLevel | Should -Be 160
         $result.DataFileLocations | Should -Match 'D:\\Data\\appdb\.mdf'
         $result.LogFileLocations | Should -Match 'L:\\Logs\\appdb\.ldf'
         $result.SourceVolumeSpace | Should -Match '500 GB total, 100 GB free'

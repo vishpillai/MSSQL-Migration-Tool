@@ -332,6 +332,8 @@ function Get-MigrationDiscovery {
                 SourceAgentJobCount = $serverObjectCounts.AgentJobCount
                 CompatibilityLevel = $compatibility
                 CompatibilityLevelNumber = $compatibilityNumber
+                TargetMinCompatibilityLevel = if ([int]$targetConnection.VersionMajor -le 11) { 90 } else { 100 }
+                TargetMaxCompatibilityLevel = [int]$targetConnection.VersionMajor * 10
                 State = $database.Status
                 RecoveryModel = [string]$database.RecoveryModel
                 TdeEncrypted = $tdeReadiness.TdeEncrypted
@@ -380,6 +382,12 @@ function Test-MigrationConfiguration {
             throw "The dbatools module is required. Install it with Install-Module dbatools. $($_.Exception.Message)"
         }
     }
+    $trustServerCertificate = if ($Configuration.Contains('TrustServerCertificate')) {
+        [bool]$Configuration.TrustServerCertificate
+    } else {
+        $true
+    }
+    Set-MigrationSqlConnectionSettings -TrustServerCertificate $trustServerCertificate
 
     foreach ($pair in $Configuration.SourceTargets) {
         $migrationMode = if ($pair.Contains('MigrationMode')) { [string]$pair.MigrationMode } else { 'Full' }

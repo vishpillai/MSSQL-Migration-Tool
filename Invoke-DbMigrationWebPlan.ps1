@@ -184,13 +184,28 @@ try {
             }
             $databasePlan = $pairPlan.Databases[$databaseIndex]
             $databaseName = [string]$databasePlan.Database
+            $targetDatabaseName = if ($databasePlan.Contains('TargetDatabase') -and $databasePlan.TargetDatabase) {
+                ConvertTo-MigrationTargetDatabaseName -DatabaseName ([string]$databasePlan.TargetDatabase)
+            } else {
+                $databaseName
+            }
+            $targetCompatibilityLevel = if ($databasePlan.Contains('TargetCompatibilityLevel')) {
+                $databasePlan.TargetCompatibilityLevel
+            } else {
+                $null
+            }
             Write-MigrationProgressEvent -ProgressPath $fullProgressPath -Source $pair.Source -Target $pair.Target `
                 -Database $databaseName -Stage 'DatabaseSequence' -Status 'Started' `
-                -Message "Validating and migrating database $($databaseIndex + 1) of $($pairPlan.Databases.Count)."
+                -Message "Migrating '$databaseName' to '$targetDatabaseName' ($($databaseIndex + 1) of $($pairPlan.Databases.Count))."
 
             $workerConfiguration = $configuration.Clone()
             $workerConfiguration.SourceTargets = @($pair)
             $workerConfiguration.IncludeDatabases = @($databaseName)
+            $workerConfiguration.DatabaseTargetMappings = @(@{
+                SourceDatabase = $databaseName
+                TargetDatabase = $targetDatabaseName
+                TargetCompatibilityLevel = $targetCompatibilityLevel
+            })
             $workerConfiguration.OverwriteExistingDatabases = @()
             $workerConfiguration.SkipExistingDatabases = @()
             foreach ($property in @(
@@ -203,6 +218,7 @@ try {
             $workerConfiguration.UpdateStatistics = [bool]$plan.Options.UpdateStatistics
             if ($pair.MigrationMode -eq 'SchemaOnly') {
                 $schemaResult = Invoke-DatabaseSchemaOnlyMigration -Pair $pair -Database $databaseName `
+                    -TargetDatabaseName $targetDatabaseName -TargetCompatibilityLevel $targetCompatibilityLevel `
                     -Overwrite ([bool]$databasePlan.Overwrite) -ProgressPath $fullProgressPath `
                     -ControlPath $fullControlPath
                 $migrationRows.Add($schemaResult)
@@ -229,7 +245,7 @@ try {
                 }
                 continue
             }
-            if (Test-MigrationDatabaseExists -SqlInstance $pair.Target -Database $databaseName) {
+            if (Test-MigrationDatabaseExists -SqlInstance $pair.Target -Database $targetDatabaseName) {
                 if ([bool]$databasePlan.Overwrite) {
                     $workerConfiguration.OverwriteExistingDatabases = @($databaseName)
                 }
