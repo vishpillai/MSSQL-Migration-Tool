@@ -642,7 +642,8 @@ SELECT
     d.is_subscribed AS IsSubscribed,
     d.is_broker_enabled AS IsBrokerEnabled,
     d.is_trustworthy_on AS IsTrustworthyOn,
-    d.is_db_chaining_on AS IsDbChainingOn
+    d.is_db_chaining_on AS IsDbChainingOn,
+    d.collation_name AS Collation
 FROM sys.databases AS d
 WHERE d.name = N'$escapedDatabase';
 "@)
@@ -848,6 +849,47 @@ ORDER BY candidate.PatternName, ModuleName;
             & $addFinding 'Code compatibility' 'Warning' 'Known legacy syntax scan' 'Not verified' `
                 "Could not scan stored module definitions: $($_.Exception.Message)" `
                 'Grant VIEW DEFINITION on the database and rerun; review application and dynamic SQL separately.'
+        }
+
+        try {
+            $sourceCollation = [string]$metadata.Collation
+            $targetCollations = @(Invoke-DbaQuery -SqlInstance $Target -Database master -EnableException -ErrorAction Stop -Query @'
+SELECT
+    CONVERT(sysname, SERVERPROPERTY('Collation')) AS ServerCollation,
+    CONVERT(sysname, DATABASEPROPERTYEX('tempdb', 'Collation')) AS TempdbCollation;
+'@)
+            if ($targetCollations.Count -ne 1) { throw 'Target collation query returned no result.' }
+            $targetServerCollation = [string]$targetCollations[0].ServerCollation
+            $targetTempdbCollation = [string]$targetCollations[0].TempdbCollation
+
+            if ($sourceCollation -ne $targetTempdbCollation) {
+                $tempTableCandidates = @(Invoke-DbaQuery -SqlInstance $Source -Database $database -EnableException -ErrorAction Stop -Query @'
+SELECT TOP (200)
+    QUOTENAME(OBJECT_SCHEMA_NAME(m.object_id)) + N'.' + QUOTENAME(OBJECT_NAME(m.object_id)) AS ModuleName
+FROM sys.sql_modules AS m
+WHERE (m.definition LIKE N'%CREATE TABLE #%' OR m.definition LIKE N'%SELECT%INTO #%' OR m.definition LIKE N'%DECLARE @%TABLE%')
+  AND m.definition LIKE N'%char%'
+  AND m.definition NOT LIKE N'%COLLATE%'
+ORDER BY ModuleName;
+'@)
+                $candidateText = if ($tempTableCandidates.Count -gt 0) {
+                    " $($tempTableCandidates.Count) module(s) create temp tables or table variables with character columns and no COLLATE clause (for example: $((@($tempTableCandidates | Select-Object -First 5 -ExpandProperty ModuleName)) -join ', '))."
+                }
+                else { '' }
+                & $addFinding 'Collation' 'Warning' 'Source database vs target tempdb collation' 'Review' `
+                    "Source database collation is '$sourceCollation' but target tempdb collation is '$targetTempdbCollation' (target server: '$targetServerCollation'). Temp tables and table variables use the tempdb collation, so comparisons with database columns can fail with 'Cannot resolve the collation conflict' (Msg 468).$candidateText The candidate scan is a lexical text match and may include false positives." `
+                    'Either install/rebuild the target with the source collation, or add COLLATE DATABASE_DEFAULT to character columns of temp tables and table variables in the listed modules, then test those procedures on the target.'
+            }
+            else {
+                & $addFinding 'Collation' 'Information' 'Source database vs target tempdb collation' 'Passed' `
+                    "Source database collation and target tempdb collation are both '$sourceCollation'." `
+                    'No collation action required for temp-table comparisons.'
+            }
+        }
+        catch {
+            & $addFinding 'Collation' 'Warning' 'Source database vs target tempdb collation' 'Not verified' `
+                "Could not compare database and target tempdb collations: $($_.Exception.Message)" `
+                'Verify the target server and tempdb collation match the source database collation before migration.'
         }
 
         if ([bool]$metadata.IsEncrypted) {

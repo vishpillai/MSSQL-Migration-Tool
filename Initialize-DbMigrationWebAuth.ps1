@@ -54,6 +54,6 @@ finally {
     $confirmation.Dispose()
 }
 
-Save-MigrationWebAuthRecord -Record $record -Path $fullPath -PortableMode:$PortableMode
+Save-MigrationWebAuthRecord -Record $record -Path $fullPath
 
 Write-Output "Authentication record created at $fullPath. Password material is stored only as a salted PBKDF2 hash."

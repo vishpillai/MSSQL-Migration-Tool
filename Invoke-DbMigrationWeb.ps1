@@ -49,15 +49,8 @@ $script:WindowsAuthGroup = $WindowsAuthGroup
 $script:AuthRecord = $null
 $script:SetupToken = $null
 if ($script:AuthenticationMode -eq 'Application') {
-    if (Test-Path -LiteralPath $fullAuthPath -PathType Leaf) {
-        $loadedAuthRecord = Get-Content -LiteralPath $fullAuthPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
-        $legacyAuthRecord = -not $loadedAuthRecord.Contains('Users')
-        $script:AuthRecord = ConvertTo-MigrationWebAuthStore -Record $loadedAuthRecord
-        if ($legacyAuthRecord) {
-            Save-MigrationWebAuthRecord -Record $script:AuthRecord -Path $fullAuthPath -PortableMode:$PortableMode
-        }
-    }
-    else {
+    $script:AuthRecord = Import-MigrationWebAuthStore -Path $fullAuthPath -LegacyPath $storage.LegacyAuthPath
+    if ($null -eq $script:AuthRecord) {
         $setupBytes = [byte[]]::new(32)
         [Security.Cryptography.RandomNumberGenerator]::Fill($setupBytes)
         $script:SetupToken = [Convert]::ToBase64String($setupBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
@@ -403,7 +396,7 @@ function Find-WebApplicationUser {
 }
 
 function Save-WebApplicationAuthStore {
-    Save-MigrationWebAuthRecord -Record $script:AuthRecord -Path $fullAuthPath -PortableMode:$script:PortableMode
+    Save-MigrationWebAuthRecord -Record $script:AuthRecord -Path $fullAuthPath
 }
 
 function Get-WebSession {
@@ -1421,7 +1414,7 @@ try {
                     if ($securePassword) { $securePassword.Dispose() }
                 }
                 Save-MigrationWebAuthRecord -Record $newAuthStore -Path $fullAuthPath `
-                    -PortableMode:$script:PortableMode -CreateOnly
+                    -CreateOnly
                 $script:AuthRecord = $newAuthStore
                 $script:SetupToken = $null
                 $script:SetupAttempts.Remove($address)
@@ -1675,7 +1668,7 @@ try {
                     }
                     $nextStore = $script:AuthRecord | ConvertTo-Json -Depth 8 | ConvertFrom-Json -AsHashtable
                     $nextStore.Users = @($nextStore.Users) + @($newUser)
-                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath -PortableMode:$script:PortableMode
+                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath
                     $script:AuthRecord = $nextStore
                     Write-WebAuditRecord -Action 'Application user created' -Actor $session.Username -Outcome 'Succeeded' -Details @{
                         User = $username
@@ -1718,7 +1711,7 @@ try {
                     })[0]
                     $nextUser.Features = @($body.Features | Select-Object -Unique)
                     $nextUser.Enabled = [bool]$body.Enabled
-                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath -PortableMode:$script:PortableMode
+                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath
                     $script:AuthRecord = $nextStore
                     foreach ($tokenKey in @($script:Sessions.Keys)) {
                         if ([string]::Equals([string]$script:Sessions[$tokenKey].Username, [string]$targetUser.Username, [StringComparison]::OrdinalIgnoreCase)) {
@@ -1752,7 +1745,7 @@ try {
                     $nextStore.Users = @($nextStore.Users | Where-Object {
                         -not [string]::Equals([string]$_.Username, [string]$targetUser.Username, [StringComparison]::OrdinalIgnoreCase)
                     })
-                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath -PortableMode:$script:PortableMode
+                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath
                     $script:AuthRecord = $nextStore
                     foreach ($tokenKey in @($script:Sessions.Keys)) {
                         if ([string]::Equals([string]$script:Sessions[$tokenKey].Username, [string]$targetUser.Username, [StringComparison]::OrdinalIgnoreCase)) {
@@ -1780,7 +1773,7 @@ try {
                     }
                     $nextStore = $script:AuthRecord | ConvertTo-Json -Depth 8 | ConvertFrom-Json -AsHashtable
                     $nextStore.Branding = Set-MigrationWebBranding -Branding $nextStore.Branding -Updates $body.Branding
-                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath -PortableMode:$script:PortableMode
+                    Save-MigrationWebAuthRecord -Record $nextStore -Path $fullAuthPath
                     $script:AuthRecord = $nextStore
                     Write-WebAuditRecord -Action 'Application branding updated' -Actor $session.Username -Outcome 'Succeeded' -Details @{
                         ProductName = [string]$nextStore.Branding.ProductName

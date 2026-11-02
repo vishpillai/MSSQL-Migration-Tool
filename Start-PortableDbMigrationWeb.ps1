@@ -53,7 +53,9 @@ if (-not $isElevated -and -not $env:DBMIGRATION_NO_ELEVATE) {
 }
 $storage = Resolve-MigrationWebStoragePaths -AppRoot $AppRoot -PortableMode
 
-if (-not (Test-Path -LiteralPath $storage.AuthPath -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $storage.AuthPath -PathType Leaf) -and
+    (-not $storage.LegacyAuthPath -or
+        -not (Test-Path -LiteralPath $storage.LegacyAuthPath -PathType Leaf))) {
     Write-Host 'No application account exists yet. Complete first-run administrator setup in the browser; a one-time setup code will be shown by the web host.'
 }
 

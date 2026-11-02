@@ -396,6 +396,41 @@ function Save-MigrationWebAuthRecord {
     }
 }
 
+function Import-MigrationWebAuthStore {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Path,
+        [Parameter()][string] $LegacyPath
+    )
+
+    $sourcePath = $Path
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        if ([string]::IsNullOrWhiteSpace($LegacyPath) -or
+            -not (Test-Path -LiteralPath $LegacyPath -PathType Leaf)) {
+            return $null
+        }
+        $sourcePath = $LegacyPath
+    }
+
+    $loadedRecord = Get-Content -LiteralPath $sourcePath -Raw -ErrorAction Stop |
+        ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    $legacyRecord = -not $loadedRecord.Contains('Users')
+    $store = ConvertTo-MigrationWebAuthStore -Record $loadedRecord
+
+    if (-not [string]::Equals(
+        [System.IO.Path]::GetFullPath($sourcePath),
+        [System.IO.Path]::GetFullPath($Path),
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        Save-MigrationWebAuthRecord -Record $store -Path $Path -CreateOnly
+    }
+    elseif ($legacyRecord) {
+        Save-MigrationWebAuthRecord -Record $store -Path $Path
+    }
+
+    return $store
+}
+
 function Test-MigrationWebWindowsGroupMembership {
     [CmdletBinding()]
     param(
@@ -434,11 +469,17 @@ function Resolve-MigrationWebStoragePaths {
     }
 
     if ($PortableMode) {
-        $authDirectory = Join-Path $resolvedAppRoot 'portable\auth'
+        $localAppData = [System.Environment]::GetFolderPath('LocalApplicationData')
+        if ([string]::IsNullOrWhiteSpace($localAppData)) {
+            throw 'The current Windows profile does not have a Local AppData directory for persistent authentication storage.'
+        }
+        $authDirectory = Join-Path $localAppData 'DbMigrationWeb\Portable'
+        $legacyAuthPath = Join-Path $resolvedAppRoot 'portable\auth\auth.json'
         $logDirectory = Join-Path $resolvedAppRoot 'portable\logs'
     }
     else {
         $authDirectory = Join-Path ([System.Environment]::GetFolderPath('CommonApplicationData')) 'DbMigrationWeb'
+        $legacyAuthPath = $null
         $logDirectory = Join-Path ([System.Environment]::GetFolderPath('LocalApplicationData')) 'DbMigrationWeb\Logs'
     }
 
@@ -446,9 +487,10 @@ function Resolve-MigrationWebStoragePaths {
         AppRoot = $resolvedAppRoot
         AuthDirectory = $authDirectory
         AuthPath = Join-Path $authDirectory 'auth.json'
+        LegacyAuthPath = $legacyAuthPath
         LogDirectory = $logDirectory
         IsPortable = [bool]$PortableMode
     }
 }
 
-Export-ModuleMember -Function New-MigrationWebPasswordRecord, Test-MigrationWebPassword, Save-MigrationWebAuthRecord, Test-MigrationWebWindowsGroupMembership, Resolve-MigrationWebStoragePaths, Get-MigrationWebDefaultBranding, ConvertTo-MigrationWebAuthStore, New-MigrationWebUserRecord, Get-MigrationWebSafeUser, Get-MigrationWebFeatureNames, Set-MigrationWebBranding
+Export-ModuleMember -Function New-MigrationWebPasswordRecord, Test-MigrationWebPassword, Save-MigrationWebAuthRecord, Import-MigrationWebAuthStore, Test-MigrationWebWindowsGroupMembership, Resolve-MigrationWebStoragePaths, Get-MigrationWebDefaultBranding, ConvertTo-MigrationWebAuthStore, New-MigrationWebUserRecord, Get-MigrationWebSafeUser, Get-MigrationWebFeatureNames, Set-MigrationWebBranding

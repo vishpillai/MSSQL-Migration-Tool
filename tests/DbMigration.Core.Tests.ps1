@@ -95,16 +95,43 @@ Describe 'Migration web authentication' {
 }
 
 Describe 'Portable web storage paths' {
-    It 'stores portable auth files under the app folder instead of ProgramData' {
+    It 'stores portable auth in stable local app data and keeps portable logs beside the app' {
         $storage = Resolve-MigrationWebStoragePaths -AppRoot $TestDrive -PortableMode
 
         $storage.IsPortable | Should -BeTrue
-        $storage.AuthPath | Should -Be (Join-Path $TestDrive 'portable\auth\auth.json')
+        $localAppData = [System.Environment]::GetFolderPath('LocalApplicationData')
+        $storage.AuthPath | Should -Be (Join-Path $localAppData 'DbMigrationWeb\Portable\auth.json')
+        $storage.LegacyAuthPath | Should -Be (Join-Path $TestDrive 'portable\auth\auth.json')
         $storage.LogDirectory | Should -Be (Join-Path $TestDrive 'portable\logs')
     }
 }
 
 Describe 'Web authentication record persistence' {
+    It 'migrates the portable app-folder auth file to stable local storage without changing credentials' {
+        $legacyPath = Join-Path $TestDrive 'legacy\portable\auth\auth.json'
+        $authPath = Join-Path $TestDrive 'local\auth.json'
+        $password = ConvertTo-SecureString 'test-password-1234' -AsPlainText -Force
+        try {
+            $record = New-MigrationWebPasswordRecord -Username 'persistent-admin' -Password $password
+            Save-MigrationWebAuthRecord -Record $record -Path $legacyPath -PortableMode
+
+            $store = Import-MigrationWebAuthStore -Path $authPath -LegacyPath $legacyPath
+
+            (Test-Path -LiteralPath $authPath -PathType Leaf) | Should -BeTrue
+            (Test-Path -LiteralPath $legacyPath -PathType Leaf) | Should -BeTrue
+            Test-MigrationWebPassword -Record $store.Users[0] -Username 'persistent-admin' -Password 'test-password-1234' |
+                Should -BeTrue
+            (Get-Acl -LiteralPath $authPath).AreAccessRulesProtected | Should -BeTrue
+
+            $loadedStore = Import-MigrationWebAuthStore -Path $authPath -LegacyPath $legacyPath
+            Test-MigrationWebPassword -Record $loadedStore.Users[0] -Username 'persistent-admin' -Password 'test-password-1234' |
+                Should -BeTrue
+        }
+        finally {
+            $password.Dispose()
+        }
+    }
+
     It 'creates an authentication record atomically for first-run setup' {
         $authPath = Join-Path $TestDrive 'portable\auth\auth.json'
         $password = ConvertTo-SecureString 'test-password-1234' -AsPlainText -Force
@@ -145,7 +172,7 @@ Describe 'Web authentication record persistence' {
 }
 
 Describe 'Migration configuration' {
-    It 'loads a valid configuration and defaults exclusions and statistics' {
+    It 'loads a valid configuration and defaults exclusions, statistics, and maintenance installation' {
         $path = Join-Path $TestDrive 'migration.json'
         @'
 {
@@ -1207,16 +1234,27 @@ param([string] $HostName, [int] $Port, [switch] $PortableMode, [string] $AppRoot
                 & (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -AppRoot $appRoot 6>&1 |
                     ForEach-Object { $_.ToString() }
             ) -join "`n"
-            $authPath = Join-Path $appRoot 'portable\auth\auth.json'
-            $output | Should -Match 'Complete first-run administrator setup in the browser'
+            $storage = Resolve-MigrationWebStoragePaths -AppRoot $appRoot -PortableMode
+            $authPath = $storage.AuthPath
+            if (Test-Path -LiteralPath $authPath -PathType Leaf) {
+                $output | Should -Not -Match 'Complete first-run administrator setup in the browser'
+            }
+            else {
+                $output | Should -Match 'Complete first-run administrator setup in the browser'
+            }
             $output | Should -Not -Match 'Initial portable login|Password:'
-            Test-Path -LiteralPath $authPath | Should -BeFalse
+            Test-Path -LiteralPath $storage.LegacyAuthPath | Should -BeFalse
 
             $secondLaunch = @(
                 & (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -AppRoot $appRoot 6>&1 |
                     ForEach-Object { $_.ToString() }
             ) -join "`n"
-            $secondLaunch | Should -Match 'Complete first-run administrator setup in the browser'
+            if (Test-Path -LiteralPath $authPath -PathType Leaf) {
+                $secondLaunch | Should -Not -Match 'Complete first-run administrator setup in the browser'
+            }
+            else {
+                $secondLaunch | Should -Match 'Complete first-run administrator setup in the browser'
+            }
         }
         finally {
             $env:DBMIGRATION_NO_ELEVATE = $previousNoElevate
@@ -1328,6 +1366,9 @@ Describe 'Migration readiness assessment' {
         $script:readinessTargetMajor = 17
         $script:readinessConnectionIndex = 0
         $script:readinessLegacyModules = $false
+        $script:readinessSourceCollation = 'SQL_Latin1_General_CP1_CI_AS'
+        $script:readinessTempdbCollation = 'SQL_Latin1_General_CP1_CI_AS'
+        $script:readinessTempTableModules = $false
         Mock Connect-DbaInstance -ModuleName DbMigration.Discovery {
             $script:readinessConnectionIndex++
             if ($script:readinessConnectionIndex -eq 1) {
@@ -1339,6 +1380,13 @@ Describe 'Migration readiness assessment' {
         }
         Mock Invoke-DbaQuery -ModuleName DbMigration.Discovery {
             if ($Query -match 'SELECT name, state_desc AS State') { return @() }
+            if ($Query -match "DATABASEPROPERTYEX\('tempdb'") {
+                return [pscustomobject]@{ ServerCollation = $script:readinessTempdbCollation; TempdbCollation = $script:readinessTempdbCollation }
+            }
+            if ($Query -match 'CREATE TABLE #') {
+                if ($script:readinessTempTableModules) { return [pscustomobject]@{ ModuleName = '[dbo].[usp_temp_proc]' } }
+                return @()
+            }
             if ($SqlInstance -eq 'target-sql') {
                 return [pscustomobject]@{ IsFullTextInstalled = $true; FilestreamConfiguredLevel = 2 }
             }
@@ -1355,6 +1403,7 @@ Describe 'Migration readiness assessment' {
                     IsBrokerEnabled = $false
                     IsTrustworthyOn = $false
                     IsDbChainingOn = $false
+                    Collation = $script:readinessSourceCollation
                 }
             }
             if ($Query -match 'sys\.fulltext_catalogs') {
@@ -1388,6 +1437,26 @@ Describe 'Migration readiness assessment' {
         @($results[0].Findings | Where-Object { $_.Check -eq 'Database compatibility level' -and $_.Status -eq 'Passed' }).Count | Should -Be 1
         @($results[0].Findings | Where-Object { $_.Check -eq 'Target restore capacity' -and $_.Status -eq 'Passed' }).Count | Should -Be 1
         Should -Invoke Test-MigrationRestoreCapacity -ModuleName DbMigration.Discovery -Times 1 -Exactly
+    }
+
+    It 'warns when the source database collation differs from target tempdb and lists temp-table modules' {
+        $script:readinessSourceCollation = 'Latin1_General_BIN'
+        $script:readinessTempTableModules = $true
+
+        $results = @(Get-MigrationReadinessAssessment -Source 'source-sql' -Target 'target-sql' -Databases @('application'))
+
+        $finding = @($results[0].Findings | Where-Object { $_.Category -eq 'Collation' })
+        $finding | Should -HaveCount 1
+        $finding[0].Severity | Should -Be 'Warning'
+        $finding[0].Details | Should -Match 'Latin1_General_BIN'
+        $finding[0].Details | Should -Match 'usp_temp_proc'
+        $results[0].Readiness | Should -Be 'Review required'
+    }
+
+    It 'reports a passed collation check when database and tempdb collations match' {
+        $results = @(Get-MigrationReadinessAssessment -Source 'source-sql' -Target 'target-sql' -Databases @('application'))
+
+        @($results[0].Findings | Where-Object { $_.Category -eq 'Collation' -and $_.Status -eq 'Passed' }).Count | Should -Be 1
     }
 
     It 'reports target downgrade as a blocker and stored-module text matches as candidates' {
