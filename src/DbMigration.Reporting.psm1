@@ -198,7 +198,7 @@ function Get-MigrationAuditLog {
 
     try {
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
-            foreach ($line in [System.IO.File]::ReadLines($Path)) {
+            foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
                 if ([string]::IsNullOrWhiteSpace($line)) { continue }
                 try {
                     $envelope = ConvertFrom-Json -InputObject $line -AsHashtable -ErrorAction Stop

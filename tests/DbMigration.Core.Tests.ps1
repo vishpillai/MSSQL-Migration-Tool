@@ -1261,6 +1261,40 @@ param([string] $HostName, [int] $Port, [switch] $PortableMode, [string] $AppRoot
         }
     }
 
+    It 'reports a clear error when no free port remains near the preferred port' {
+        $runningHost = $null
+        if ([System.Threading.Mutex]::TryOpenExisting('Global\DbMigrationToolWebHost', [ref]$runningHost)) {
+            $runningHost.Dispose()
+            Set-ItResult -Skipped -Because 'A running app host holds the machine-wide single-instance mutex.'
+            return
+        }
+
+        $appRoot = Join-Path $TestDrive 'PortablePortExhaustion'
+        $null = New-Item -ItemType Directory -Path (Join-Path $appRoot 'src') -Force
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\src\DbMigration.WebAuth.psm1') `
+            -Destination (Join-Path $appRoot 'src\DbMigration.WebAuth.psm1')
+        @'
+param([string] $HostName, [int] $Port, [switch] $PortableMode, [string] $AppRoot)
+'@ | Set-Content -LiteralPath (Join-Path $appRoot 'Invoke-DbMigrationWeb.ps1')
+
+        $previousNoElevate = $env:DBMIGRATION_NO_ELEVATE
+        $env:DBMIGRATION_NO_ELEVATE = '1'
+        $blockingListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 65535)
+        $blockingListener.Start()
+        try {
+            $output = @(
+                & (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -AppRoot $appRoot -Port 65535 6>&1 |
+                    ForEach-Object { $_.ToString() }
+            ) -join "`n"
+            $output | Should -Match 'Could not find a free loopback port near 65535'
+            $output | Should -Not -Match 'out of the range of valid values'
+        }
+        finally {
+            $blockingListener.Stop()
+            $env:DBMIGRATION_NO_ELEVATE = $previousNoElevate
+        }
+    }
+
     It 'installs the app bundle in a stable location and cleans up correctly' {
         $installRoot = Join-Path $TestDrive 'DbMigrationTool'
         $portableAuth = Join-Path $installRoot 'portable\auth'

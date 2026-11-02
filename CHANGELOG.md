@@ -12,6 +12,7 @@ follow semantic versioning.
 - Migrated existing single-account authentication files to the new user store without changing the existing administrator credentials.
 - Added first-run administrator creation in the browser, protected by a single-use host-console code, loopback-only setup, atomic auth-file creation, and a 14-character minimum password; fresh installs no longer receive a generated login password.
 - Consolidated auth-file persistence with atomic writes and restricted ACLs for standard-mode installations.
+- Portable browser mode now keeps its authentication store in the user's Local AppData (`DbMigrationWeb\Portable`) with restricted ACLs instead of beside the app, so credentials survive app-folder replacement; an existing app-folder auth file is migrated automatically on first launch.
 - Documented why browser-based MAC-address registration is not used: browsers cannot reliably obtain a device MAC, and MAC addresses are mutable/spoofable identifiers.
 - Added a business-oriented audit trail with structured events, failed-login and operation-request outcomes, DPAPI-protected HMAC chaining, a signed head checkpoint, integrity warnings, server-side filters, and audit-only JSON/CSV export.
 - Added an original responsive SQL Server illustration to the sign-in page; it is bundled inline and works without an external image service.
@@ -24,6 +25,8 @@ follow semantic versioning.
 - Added SSMS-style history: previously used servers and backup paths are suggested as you type in the pair, patch, and standalone fields, and choosing a known source or target autofills its last-used partner and backup path. Only connection details are stored (in browser local storage, never credentials); use "Clear history" to reset.
 - Discovery no longer needs a shared backup path; it is required only when starting a migration. Sample placeholders now show as watermarks instead of real values.
 - Fixed the patch assessment failing with "parameter 'ne' is specified more than once", and added SQL Server 2025 to the patch catalog.
+- Fixed the audit-log reader leaking a file handle on tamper-detection paths, which could block log cleanup and test-drive deletion with "file in use" errors.
+- Fixed the portable launcher crashing with a raw out-of-range error instead of the clear "no free port" message when the preferred port is near 65535 and occupied.
 - Only one web host can run per machine; launching a second one is refused with a clear message.
 - The launcher now asks for administrator rights (UAC) so SQL Server patching of local instances works; if the host is not elevated, patching a local instance fails fast with an explanatory message instead of "Console not elevated".
 - Added sequential custom T-SQL execution for arbitrary independent SQL instances, with per-instance result and failure reporting.

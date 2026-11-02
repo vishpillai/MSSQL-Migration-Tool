@@ -12,7 +12,7 @@ function Get-FreeTcpPort {
     param([Parameter()][int] $PreferredPort)
 
     $candidate = $PreferredPort
-    for ($offset = 0; $offset -lt 50; $offset++) {
+    for ($offset = 0; $offset -lt 50 -and $candidate -le 65535; $offset++) {
         $tcpListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $candidate)
         try {
             $tcpListener.Start()
