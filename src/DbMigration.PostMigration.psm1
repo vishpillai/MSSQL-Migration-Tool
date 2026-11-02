@@ -107,4 +107,16 @@ function Invoke-DatabasePostMigration {
     }
 }
 
-Export-ModuleMember -Function Invoke-ServerObjectMigration, Invoke-LinkedServerConfiguration, Invoke-DatabasePostMigration
+function Install-OlaHallengrenMaintenanceSolution {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string] $SqlInstance
+    )
+
+    Install-DbaMaintenanceSolution -SqlInstance $SqlInstance -Database master `
+        -Confirm:$false -EnableException -ErrorAction Stop
+}
+
+Export-ModuleMember -Function Invoke-ServerObjectMigration, Invoke-LinkedServerConfiguration, Invoke-DatabasePostMigration, Install-OlaHallengrenMaintenanceSolution

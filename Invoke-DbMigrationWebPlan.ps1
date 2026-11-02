@@ -77,6 +77,7 @@ $configuration.SourceTargets = @($plan.Pairs | ForEach-Object {
     $configuredPair
 })
 $migrationRows = [System.Collections.Generic.List[object]]::new()
+$installedMaintenanceTargets = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $runFailed = $false
 $runStopped = $false
 $runFailureMessage = ''
@@ -210,12 +211,13 @@ try {
             $workerConfiguration.SkipExistingDatabases = @()
             foreach ($property in @(
                 'MigrateLogins', 'MigrateAgentJobs', 'MigrateAgentOperators',
-                'ConfigureLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics'
+                'ConfigureLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics', 'InstallOlaHallengren'
             )) {
                 $workerConfiguration[$property] = $false
             }
             $workerConfiguration.RepairOrphanUsers = [bool]$plan.Options.RepairOrphanUsers
             $workerConfiguration.UpdateStatistics = [bool]$plan.Options.UpdateStatistics
+            $workerConfiguration.InstallOlaHallengren = $false
             if ($pair.MigrationMode -eq 'SchemaOnly') {
                 $schemaResult = Invoke-DatabaseSchemaOnlyMigration -Pair $pair -Database $databaseName `
                     -TargetDatabaseName $targetDatabaseName -TargetCompatibilityLevel $targetCompatibilityLevel `
@@ -305,7 +307,10 @@ try {
             $runStopped = $true
             break
         }
-        $hasServerWork = Test-MigrationServerWorkEnabled -Options $plan.Options -MigrationMode $pair.MigrationMode
+        $serverOptions = $plan.Options.Clone()
+        $serverOptions.InstallOlaHallengren = [bool]$plan.Options.InstallOlaHallengren -and
+            -not $installedMaintenanceTargets.Contains([string]$pair.Target)
+        $hasServerWork = Test-MigrationServerWorkEnabled -Options $serverOptions -MigrationMode $pair.MigrationMode
         if ($hasServerWork) {
             $serverConfiguration = $configuration.Clone()
             $serverConfiguration.SourceTargets = @($pair)
@@ -320,12 +325,13 @@ try {
             )
             $serverConfiguration.RepairOrphanUsers = $false
             $serverConfiguration.UpdateStatistics = $false
+            $serverConfiguration.InstallOlaHallengren = [bool]$serverOptions.InstallOlaHallengren
             $serverWorkerResult = Invoke-MigrationWorker -WorkerConfiguration $serverConfiguration `
                 -WorkerName "pair-$pairIndex-server-objects"
             $serverRows = @($serverWorkerResult.Rows)
             $serverFailures = @($serverRows | Where-Object Status -eq 'Failed')
             $completedServerStages = @($serverRows | Where-Object {
-                $_.Stage -in @('ServerObjects', 'LinkedServers') -and $_.Status -eq 'Completed'
+                $_.Stage -in @('ServerObjects', 'LinkedServers', 'OlaHallengrenMaintenance') -and $_.Status -eq 'Completed'
             })
             if ($serverFailures.Count -gt 0 -or $completedServerStages.Count -eq 0) {
                 $runFailed = $true
@@ -334,6 +340,9 @@ try {
                 Write-MigrationProgressEvent -ProgressPath $fullProgressPath -Source $pair.Source -Target $pair.Target `
                     -Stage 'InstanceSequence' -Status 'Failed' -Message $runFailureMessage
                 break
+            }
+            if (@($serverRows | Where-Object { $_.Stage -eq 'OlaHallengrenMaintenance' -and $_.Status -eq 'Completed' }).Count -gt 0) {
+                $null = $installedMaintenanceTargets.Add([string]$pair.Target)
             }
         }
         Write-MigrationProgressEvent -ProgressPath $fullProgressPath -Source $pair.Source -Target $pair.Target `

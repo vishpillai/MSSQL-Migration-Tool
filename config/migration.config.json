@@ -23,6 +23,7 @@
   "AllowTargetReplace": false,
   "TrustServerCertificate": true,
   "UpdateStatistics": true,
+  "InstallOlaHallengren": false,
   "OutputPath": ".\\reports",
   "LinkedServersCsv": ".\\config\\LinkedServers.csv"
 }

@@ -570,7 +570,7 @@ function Start-WebMigration {
     if ($Body.Databases -isnot [array]) {
         throw [ArgumentException]::new('Databases must be a JSON array.')
     }
-    foreach ($option in @('MigrateLogins', 'MigrateAgentJobs', 'MigrateAgentOperators', 'ConfigureLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics')) {
+    foreach ($option in @('MigrateLogins', 'MigrateAgentJobs', 'MigrateAgentOperators', 'ConfigureLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics', 'InstallOlaHallengren')) {
         if (-not $Body.Contains($option) -or $Body[$option] -isnot [bool]) {
             throw [ArgumentException]::new("'$option' must be provided as a JSON boolean.")
         }
@@ -586,7 +586,7 @@ function Start-WebMigration {
         throw [ArgumentException]::new('One or more selected databases are not in the latest discovery results.')
     }
     if ($selectedDatabases.Count -eq 0 -and
-        -not ($Body.MigrateLogins -or $Body.MigrateAgentJobs -or $Body.MigrateAgentOperators -or $Body.ConfigureLinkedServers)) {
+        -not ($Body.MigrateLogins -or $Body.MigrateAgentJobs -or $Body.MigrateAgentOperators -or $Body.ConfigureLinkedServers -or $Body.InstallOlaHallengren)) {
         throw [ArgumentException]::new('Select at least one database or one server-level migration option.')
     }
     $requestedOverwrites = @()
@@ -616,7 +616,7 @@ function Start-WebMigration {
 
     $runConfiguration = $script:WebConfiguration.Clone()
     foreach ($key in @($runConfiguration.Keys)) {
-        if ($key -in @('MigrateLogins', 'MigrateAgentJobs', 'MigrateAgentOperators', 'ConfigureLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics')) {
+        if ($key -in @('MigrateLogins', 'MigrateAgentJobs', 'MigrateAgentOperators', 'ConfigureLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics', 'InstallOlaHallengren')) {
             $runConfiguration.Remove($key)
         }
     }
@@ -628,7 +628,7 @@ function Start-WebMigration {
     $runConfiguration.IncludeDatabases = $selectedDatabases
     $runConfiguration.OverwriteExistingDatabases = @($overwrites)
     $runConfiguration.SkipExistingDatabases = @($skips)
-    foreach ($option in @('MigrateLogins', 'MigrateAgentJobs', 'MigrateAgentOperators', 'ConfigureLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics')) {
+    foreach ($option in @('MigrateLogins', 'MigrateAgentJobs', 'MigrateAgentOperators', 'ConfigureLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics', 'InstallOlaHallengren')) {
         $runConfiguration[$option] = $Body[$option]
     }
     $runConfiguration.AllowTargetReplace = $false
@@ -774,7 +774,7 @@ function Start-WebMigrationPlan {
     $pairs = @(ConvertTo-WebPairs -Pairs $Body.Pairs -RequireBackupPath)
     $optionNames = @(
         'MigrateLogins', 'MigrateAgentJobs', 'MigrateAgentOperators',
-        'ConfigureLinkedServers', 'SkipLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics'
+        'ConfigureLinkedServers', 'SkipLinkedServers', 'RepairOrphanUsers', 'UpdateStatistics', 'InstallOlaHallengren'
     )
     foreach ($optionName in $optionNames) {
         if (-not $Body.Options.Contains($optionName) -or $Body.Options[$optionName] -isnot [bool]) {
@@ -1804,6 +1804,7 @@ try {
                         ConfigureLinkedServers = [bool]$script:WebConfiguration.ConfigureLinkedServers
                         RepairOrphanUsers = [bool]$script:WebConfiguration.RepairOrphanUsers
                         UpdateStatistics = [bool]$script:WebConfiguration.UpdateStatistics
+                        InstallOlaHallengren = [bool]$script:WebConfiguration.InstallOlaHallengren
                     }
                 }
                 continue

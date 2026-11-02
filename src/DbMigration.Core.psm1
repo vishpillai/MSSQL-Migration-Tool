@@ -131,6 +131,12 @@ function Import-MigrationConfiguration {
             $configuration[$property] = $true
         }
     }
+    if (-not $configuration.Contains('InstallOlaHallengren')) {
+        $configuration.InstallOlaHallengren = $false
+    }
+    if ($configuration.InstallOlaHallengren -isnot [bool]) {
+        throw 'InstallOlaHallengren must be true or false.'
+    }
     foreach ($property in @('OutputPath', 'LinkedServersCsv')) {
         if ([string]::IsNullOrWhiteSpace([string]$configuration[$property])) {
             throw "Configuration property '$property' must not be empty."
@@ -291,7 +297,8 @@ function Test-MigrationServerWorkEnabled {
         ($Options.Contains('MigrateLogins') -and [bool]$Options.MigrateLogins) -or
         ($Options.Contains('MigrateAgentJobs') -and [bool]$Options.MigrateAgentJobs) -or
         ($Options.Contains('MigrateAgentOperators') -and [bool]$Options.MigrateAgentOperators) -or
-        ($configureLinkedServers -and -not $skipLinkedServers)
+        ($configureLinkedServers -and -not $skipLinkedServers) -or
+        ($Options.Contains('InstallOlaHallengren') -and [bool]$Options.InstallOlaHallengren)
     )
 }
 

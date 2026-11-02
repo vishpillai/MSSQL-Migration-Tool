@@ -887,6 +887,7 @@
               <label class="check"><input type="checkbox" data-option="ConfigureLinkedServers"> Configure linked servers (optional)</label>
               <label class="check"><input type="checkbox" data-option="RepairOrphanUsers"> Repair orphaned users</label>
               <label class="check"><input type="checkbox" data-option="UpdateStatistics"> Update statistics</label>
+              <label class="check"><input type="checkbox" data-option="InstallOlaHallengren"> Install Ola Hallengren procedures (no jobs)</label>
             </div>
             <div id="linked-server-setup" class="linked-server-setup hidden">
               <h3>Linked-server destination mapping</h3>
@@ -2558,7 +2559,7 @@
     function updateStartButton() {
       const selectedCount = pairs.reduce((sum, pair) =>
         sum + (pair.databases || []).filter((database) => database.Selected).length, 0);
-      const hasServerWork = ["MigrateLogins", "MigrateAgentJobs", "MigrateAgentOperators", "ConfigureLinkedServers"]
+      const hasServerWork = ["MigrateLogins", "MigrateAgentJobs", "MigrateAgentOperators", "ConfigureLinkedServers", "InstallOlaHallengren"]
         .some((key) => document.querySelector(`[data-option="${key}"]`)?.checked);
       validationActive = pairs.some((pair) => pair.validationRunning);
       $("start").disabled = migrationActive || patchActive || validationActive || (!selectedCount && !hasServerWork);
@@ -4584,7 +4585,7 @@
           planPair.LinkedServers = (pair?.LinkedServers || []).map((definition) => ({ ...definition }));
         }
       }
-      const hasServerActions = ["MigrateLogins", "MigrateAgentJobs", "MigrateAgentOperators", "ConfigureLinkedServers"]
+      const hasServerActions = ["MigrateLogins", "MigrateAgentJobs", "MigrateAgentOperators", "ConfigureLinkedServers", "InstallOlaHallengren"]
         .some((key) => options[key]);
       if (!selectedCount && !hasServerActions) {
         $("migration-error").textContent = "Select at least one database or server-level migration option, and discover each pair first.";

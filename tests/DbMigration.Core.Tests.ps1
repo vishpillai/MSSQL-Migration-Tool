@@ -168,8 +168,24 @@ Describe 'Migration configuration' {
         $config.MigrateLogins | Should -BeTrue
         $config.ConfigureLinkedServers | Should -BeTrue
         $config.RepairOrphanUsers | Should -BeTrue
+        $config.InstallOlaHallengren | Should -BeFalse
         $config.OverwriteExistingDatabases.Count | Should -Be 0
         $config.SkipExistingDatabases.Count | Should -Be 0
+    }
+
+    It 'requires the Ola Hallengren installation setting to be a JSON boolean' {
+        $path = Join-Path $TestDrive 'invalid-ola-maintenance.json'
+        @'
+{
+  "SourceTargets": [{"Source":"source","Target":"target","BackupPath":"C:\\backups"}],
+  "OutputPath": "reports",
+  "ThrottleLimit": 2,
+  "LinkedServersCsv": "linked.csv",
+  "InstallOlaHallengren": "yes"
+}
+'@ | Set-Content -LiteralPath $path
+
+        { Import-MigrationConfiguration -Path $path } | Should -Throw '*InstallOlaHallengren must be true or false.*'
     }
 
     It 'accepts an explicit schema-only migration mode' {
@@ -308,6 +324,19 @@ Describe 'Migration configuration' {
 
         $options.SkipLinkedServers = $false
         Test-MigrationServerWorkEnabled -Options $options | Should -BeTrue
+    }
+
+    It 'enables Ola Hallengren installation only for full-data migration pairs' {
+        $options = @{
+            MigrateLogins = $false
+            MigrateAgentJobs = $false
+            MigrateAgentOperators = $false
+            ConfigureLinkedServers = $false
+            InstallOlaHallengren = $true
+        }
+
+        Test-MigrationServerWorkEnabled -Options $options | Should -BeTrue
+        Test-MigrationServerWorkEnabled -Options $options -MigrationMode SchemaOnly | Should -BeFalse
     }
 
     It 'rejects backup stripe counts outside the supported range' {
@@ -1835,5 +1864,17 @@ Describe 'Post-migration repair and statistics' {
 
         Should -Invoke Repair-DbaDbOrphanUser -ModuleName DbMigration.PostMigration -Exactly 0
         Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.PostMigration -Exactly 0
+    }
+
+    It 'installs Ola Hallengren stored procedures in master without replacing objects or creating jobs' {
+        Mock Install-DbaMaintenanceSolution -ModuleName DbMigration.PostMigration
+
+        Install-OlaHallengrenMaintenanceSolution -SqlInstance target
+
+        Should -Invoke Install-DbaMaintenanceSolution -ModuleName DbMigration.PostMigration -Exactly 1 -ParameterFilter {
+            @($SqlInstance)[0].FullName -eq 'target' -and $Database -eq 'master' -and
+            $EnableException -and $ErrorAction -eq 'Stop' -and $Confirm -eq $false -and
+            -not $ReplaceExisting -and -not $InstallJobs
+        }
     }
 }

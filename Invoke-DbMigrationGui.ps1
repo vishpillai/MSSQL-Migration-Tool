@@ -261,7 +261,7 @@ $form.Controls.Add($databaseList)
 $optionsGroup = [System.Windows.Forms.GroupBox]::new()
 $optionsGroup.Text = 'Additional migration objects and actions'
 $optionsGroup.Location = [System.Drawing.Point]::new(16, 360)
-$optionsGroup.Size = [System.Drawing.Size]::new(872, 124)
+$optionsGroup.Size = [System.Drawing.Size]::new(872, 150)
 $optionsGroup.Anchor = 'Top,Left,Right'
 $form.Controls.Add($optionsGroup)
 
@@ -271,30 +271,31 @@ $operatorCheck = Add-CheckBox 'SQL Agent operators' 535 24 ([bool]$configuration
 $linkedCheck = Add-CheckBox 'Configure linked servers from CSV' 14 56 ([bool]$configuration.ConfigureLinkedServers) 300
 $repairCheck = Add-CheckBox 'Repair orphaned users' 330 56 ([bool]$configuration.RepairOrphanUsers) 250
 $statisticsCheck = Add-CheckBox 'Update database statistics' 575 56 ([bool]$configuration.UpdateStatistics) 260
-foreach ($checkBox in @($loginCheck, $jobCheck, $operatorCheck, $linkedCheck, $repairCheck, $statisticsCheck)) {
+$olaHallengrenCheck = Add-CheckBox 'Install Ola Hallengren procedures (no jobs)' 14 88 ([bool]$configuration.InstallOlaHallengren) 340
+foreach ($checkBox in @($loginCheck, $jobCheck, $operatorCheck, $linkedCheck, $repairCheck, $statisticsCheck, $olaHallengrenCheck)) {
     $optionsGroup.Controls.Add($checkBox)
     $checkBox.Location = [System.Drawing.Point]::new($checkBox.Location.X, $checkBox.Location.Y)
 }
 
-Add-Label 'Linked servers CSV' 16 496 120
-$linkedCsvBox = Add-TextBox ([string]$configuration.LinkedServersCsv) 148 494 740
-Add-Label 'Report folder' 16 530 120
-$outputBox = Add-TextBox ([string]$configuration.OutputPath) 148 528 740
-Add-Label 'Migration state' 16 564 120
-$stateBox = Add-TextBox (Join-Path $PSScriptRoot 'MigrationState.json') 148 562 740
+Add-Label 'Linked servers CSV' 16 522 120
+$linkedCsvBox = Add-TextBox ([string]$configuration.LinkedServersCsv) 148 520 740
+Add-Label 'Report folder' 16 556 120
+$outputBox = Add-TextBox ([string]$configuration.OutputPath) 148 554 740
+Add-Label 'Migration state' 16 590 120
+$stateBox = Add-TextBox (Join-Path $PSScriptRoot 'MigrationState.json') 148 588 740
 
 $startButton = [System.Windows.Forms.Button]::new()
 $startButton.Text = 'Start migration'
-$startButton.Location = [System.Drawing.Point]::new(16, 598)
+$startButton.Location = [System.Drawing.Point]::new(16, 624)
 $startButton.Size = [System.Drawing.Size]::new(150, 34)
 $form.Controls.Add($startButton)
-$statusLabel = Add-Label 'Ready' 180 603 690
+$statusLabel = Add-Label 'Ready' 180 629 690
 $statusLabel.Anchor = 'Top,Left,Right'
 
-$databaseProgressLabel = Add-Label 'Databases: waiting to start' 16 636 872
+$databaseProgressLabel = Add-Label 'Databases: waiting to start' 16 662 872
 $databaseProgressLabel.Anchor = 'Top,Left,Right'
 $databaseProgressBar = [System.Windows.Forms.ProgressBar]::new()
-$databaseProgressBar.Location = [System.Drawing.Point]::new(16, 660)
+$databaseProgressBar.Location = [System.Drawing.Point]::new(16, 686)
 $databaseProgressBar.Size = [System.Drawing.Size]::new(872, 16)
 $databaseProgressBar.Anchor = 'Top,Left,Right'
 $databaseProgressBar.Minimum = 0
@@ -307,8 +308,8 @@ $logBox.Multiline = $true
 $logBox.ReadOnly = $true
 $logBox.MaxLength = 100000
 $logBox.ScrollBars = 'Vertical'
-$logBox.Location = [System.Drawing.Point]::new(16, 686)
-$logBox.Size = [System.Drawing.Size]::new(872, 90)
+$logBox.Location = [System.Drawing.Point]::new(16, 712)
+$logBox.Size = [System.Drawing.Size]::new(872, 64)
 $logBox.Anchor = 'Top,Bottom,Left,Right'
 $form.Controls.Add($logBox)
 
@@ -456,6 +457,7 @@ $startButton.Add_Click({
         $runConfiguration.ConfigureLinkedServers = [bool]$linkedCheck.Checked
         $runConfiguration.RepairOrphanUsers = [bool]$repairCheck.Checked
         $runConfiguration.UpdateStatistics = [bool]$statisticsCheck.Checked
+        $runConfiguration.InstallOlaHallengren = [bool]$olaHallengrenCheck.Checked
         $runConfiguration.AllowTargetReplace = $false
 
         $script:runtimeConfigPath = Join-Path ([System.IO.Path]::GetTempPath()) "dbmigration-$([guid]::NewGuid().ToString('N')).json"

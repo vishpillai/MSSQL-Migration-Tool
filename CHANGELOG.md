@@ -5,6 +5,9 @@ follow semantic versioning.
 
 ## Unreleased
 
+- Added an opt-in post-migration action to install Ola Hallengren's Maintenance Solution procedures into `master` once per target instance; SQL Agent jobs are not created and existing objects are not replaced.
+- Added a collation readiness check that compares each source database's collation with the target tempdb collation and flags modules that create temp tables or table variables with character columns and no `COLLATE` clause, preventing post-migration "Cannot resolve the collation conflict" (Msg 468) errors.
+
 - Added installation-scoped Super Admin user management, server-enforced workspace grants, and local white-label/theme settings with validated colors and embedded image logos.
 - Migrated existing single-account authentication files to the new user store without changing the existing administrator credentials.
 - Added first-run administrator creation in the browser, protected by a single-use host-console code, loopback-only setup, atomic auth-file creation, and a 14-character minimum password; fresh installs no longer receive a generated login password.

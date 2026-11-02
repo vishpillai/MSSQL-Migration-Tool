@@ -99,6 +99,7 @@ if (@($validation | Where-Object Status -eq 'Failed').Count -gt 0) {
 }
 
 $migrationResults = [System.Collections.Generic.List[object]]::new()
+$installedMaintenanceTargets = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($pair in $configuration.SourceTargets) {
     $pairResultStart = $migrationResults.Count
     $backupRoot = $pair.BackupPath
@@ -288,6 +289,14 @@ foreach ($pair in $configuration.SourceTargets) {
         }
         $serverSteps += @{ Name = 'LinkedServers'; Action = { Invoke-LinkedServerConfiguration -Pair $pair -CsvPath $linkedServersCsvPath } }
     }
+    if ($configuration.InstallOlaHallengren -and
+        $pair.MigrationMode -ne 'SchemaOnly' -and
+        -not $installedMaintenanceTargets.Contains([string]$pair.Target)) {
+        $serverSteps += @{
+            Name = 'OlaHallengrenMaintenance'
+            Action = { Install-OlaHallengrenMaintenanceSolution -SqlInstance $pair.Target }
+        }
+    }
     foreach ($serverStep in $serverSteps) {
         try {
             $null = Wait-MigrationControl -ControlPath $ControlPath -ProgressPath $ProgressPath `
@@ -331,6 +340,9 @@ foreach ($pair in $configuration.SourceTargets) {
             if ($ProgressPath) {
                 Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
                     -Database '*' -Stage $serverStep.Name -Status 'Completed' -Message 'Server-object stage completed.'
+            }
+            if ($serverStep.Name -eq 'OlaHallengrenMaintenance') {
+                $null = $installedMaintenanceTargets.Add([string]$pair.Target)
             }
         }
         catch {
