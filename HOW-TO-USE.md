@@ -261,6 +261,24 @@ When a migration starts, its source and target instances are automatically selec
 
 The browser UI shows discovery metadata, a full-data/schema-only mode for every pair, per-database overwrite checkboxes and confirmations, migration options, live run and per-step percentages, and Pause, Resume, and Stop controls. Migration and Patching are separate full-screen workspaces selected from the navigation; the live migration monitor appears only in Migration. A selected existing target without explicit overwrite approval is skipped. Schema-only mode scripts database objects without copying table data and does not copy linked servers or other server-level objects. An approved schema-only overwrite drops and recreates the existing target database, deleting its data; review each overwrite decision before starting. Linked-server configuration is skipped by default; select the single **Configure linked servers (optional)** option to opt in and open the per-pair definition mapping controls. Pause takes effect at the next safe stage boundary; Resume continues the run. Stop allows the active database or server-object stage to finish safely before preventing later work. Do not stop the web host while the plan is running.
 
+## 7a. Share reports through the stakeholder portal
+
+Stakeholders can view and download all migration reports from a read-only web portal instead of receiving files by email:
+
+```powershell
+.\Start-MigrationReportPortal.ps1
+```
+
+The portal serves everything in the configured `OutputPath` reports folder (stakeholder summaries, `Migration-*` run reports, `Discovery-*` reports, readiness assessments) plus the program documents in `docs\` (tracker, checklist, runbook). HTML reports open inline with **View**; every file has a **Download** link. The index shows report counts, the latest migration run's completed/failed tallies, and tracker progress, and auto-refreshes every 2 minutes.
+
+Defaults to `http://localhost:8080/`. To share on the network:
+
+```powershell
+.\Start-MigrationReportPortal.ps1 -HostName '+' -Port 8080
+```
+
+A non-localhost binding requires an elevated prompt or a one-time URL ACL (`netsh http add urlacl url=http://+:8080/ user="DOMAIN\account"`). Restrict the port with Windows Firewall so only stakeholder machines can reach it. The portal is read-only, needs no SQL connectivity or dbatools, and only serves files inside the reports and docs folders (path traversal is rejected). Press Ctrl+C to stop it.
+
 ## 8. Review migration results
 
 After a run completes, check:

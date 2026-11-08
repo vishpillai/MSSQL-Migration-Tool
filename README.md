@@ -78,6 +78,28 @@ For a network-accessible browser interface, see [Network browser interface](#net
 
 The GUI starts with the first source/target pair from the configuration. Enter or edit the instances and backup path, validate the pair, discover databases, then check the databases and server-level objects to migrate. Pair validation checks connectivity, supported source/target versions, and visibility of the shared backup path from both SQL Server services. Capacity preflight runs during discovery and is repeated before migration. After discovery, **Assess readiness only** checks selected databases without starting a migration and provides downloadable HTML, CSV, and JSON reports. The report covers SQL Server version direction, database state and compatibility level, target-name conflicts, selected feature dependencies (Full-Text Search, FILESTREAM, In-Memory OLTP, FileTables, CDC/replication, and Service Broker), TDE key readiness, target restore capacity, security-sensitive database settings, and candidate references to a limited list of legacy T-SQL constructs in stored modules. This is a local DMA-inspired preflight, not Microsoft DMA and not an exhaustive application-compatibility analysis; code matches are lexical candidates and may be false positives. Application code outside stored modules, dynamic SQL, workloads, agent jobs, and external dependencies still require separate testing. See [Microsoft's DMA retirement notice](https://techcommunity.microsoft.com/blog/MicrosoftDataMigration/announcing-retirement-of-microsoft-data-migration-assistant-dma-tool/4424400) and [Azure Arc migration assessment](https://learn.microsoft.com/en-us/sql/sql-server/azure-arc/migration-assessment?view=sql-server-ver17) for current Microsoft guidance. The migration verifies target access and requires post-migration actions and backup cleanup to succeed before marking a database complete. It writes its normal reports and state file. If a selected database already exists on the target, the GUI asks whether to replace it; Yes authorizes replacement of that database, while No records it as skipped and leaves the target unchanged.
 
+## Stakeholder checklist, tracker, and report
+
+Three artifacts keep stakeholders informed throughout a SQL Server 2016/2019 to 2022 migration program:
+
+- [docs/MIGRATION-CHECKLIST.md](docs/MIGRATION-CHECKLIST.md) — phase-by-phase checklist (governance, discovery, preparation, execution, validation, cutover, rollback, sign-off) with dedicated sections for users/logins and for linked servers whose endpoints change in the new environment.
+- [docs/MIGRATION-TRACKER.csv](docs/MIGRATION-TRACKER.csv) — Excel-friendly per-database tracker with wave, owner, planned/cutover dates, per-phase status, RAG, and UAT sign-off. Replace the example rows with your inventory.
+- `New-MigrationStakeholderReport.ps1` — generates a self-contained HTML stakeholder report that merges the tool's run reports (latest run wins per database) with the tracker. It needs no SQL connectivity or dbatools, so anyone can run it:
+
+```powershell
+.\New-MigrationStakeholderReport.ps1
+```
+
+The report is written to the configured `OutputPath` (default `.\reports`) as `StakeholderReport-<timestamp>.html` and shows overall progress, per-pair status (including login and linked-server migration stages), wave rollup, and per-database detail with owners, dates, and sign-off.
+
+To give stakeholders self-service access to every report, run the read-only report portal:
+
+```powershell
+.\Start-MigrationReportPortal.ps1
+```
+
+It serves all generated reports (stakeholder summaries, migration runs, discovery, readiness) and the program documents (tracker, checklist, runbook) at `http://localhost:8080/` — HTML reports open inline with **View**, and every file has a **Download** link. The page auto-refreshes every 2 minutes. For network access use `-HostName '+' -Port 8080` (requires elevation or a one-time `netsh http add urlacl`) and restrict the port with Windows Firewall. The portal is read-only and only serves files inside the reports and docs folders.
+
 ## Network browser interface and portable mode
 
 The browser UI is hosted by `Invoke-DbMigrationWeb.ps1` on Windows PowerShell 7.2 or later. It supports manual hostname, `HOST\INSTANCE`, IP, and shared-backup-path entry; per-pair validation; database discovery; overwrite approval; migration options; and live run monitoring. **Validate pair** checks SQL connectivity, supported source/target versions, and backup-path visibility from both SQL Server services. Discovery adds database inventory and capacity checks. The migration repeats preflight immediately before work, then verifies restored databases, post-migration actions, and temporary-backup cleanup before marking each database complete. Connection settings can be remembered in that browser's local storage; those settings do not alter `config/migration.config.json`.
