@@ -113,6 +113,10 @@
         <File Id="file_root_App_src_DbMigration_PostMigration_psm1" Source="obj/staging/App/src/DbMigration.PostMigration.psm1" />
         <RegistryValue Root="HKCU" Key="Software\DbMigrationTool\AppFiles" Name="cmp_root_App_src_DbMigration_PostMigration_psm1" Type="string" Value="obj/staging/App/src/DbMigration.PostMigration.psm1" KeyPath="yes" />
       </Component>
+      <Component Id="cmp_root_App_src_DbMigration_Reporting_psm1" Guid="{991784e8-19ea-5270-90b1-701e3ce67538}" Directory="dir_root_App_src">
+        <File Id="file_root_App_src_DbMigration_Reporting_psm1" Source="obj/staging/App/src/DbMigration.Reporting.psm1" />
+        <RegistryValue Root="HKCU" Key="Software\DbMigrationTool\AppFiles" Name="cmp_root_App_src_DbMigration_Reporting_psm1" Type="string" Value="obj/staging/App/src/DbMigration.Reporting.psm1" KeyPath="yes" />
+      </Component>
       <Component Id="cmp_root_App_src_DbMigration_Transfer_psm1" Guid="{109b9aba-daf1-5718-a8f6-a788ac754b3c}" Directory="dir_root_App_src">
         <File Id="file_root_App_src_DbMigration_Transfer_psm1" Source="obj/staging/App/src/DbMigration.Transfer.psm1" />
         <RegistryValue Root="HKCU" Key="Software\DbMigrationTool\AppFiles" Name="cmp_root_App_src_DbMigration_Transfer_psm1" Type="string" Value="obj/staging/App/src/DbMigration.Transfer.psm1" KeyPath="yes" />
@@ -171,6 +175,7 @@
       <ComponentRef Id="cmp_root_App_src_DbMigration_Discovery_psm1" />
       <ComponentRef Id="cmp_root_App_src_DbMigration_Patching_psm1" />
       <ComponentRef Id="cmp_root_App_src_DbMigration_PostMigration_psm1" />
+      <ComponentRef Id="cmp_root_App_src_DbMigration_Reporting_psm1" />
       <ComponentRef Id="cmp_root_App_src_DbMigration_Transfer_psm1" />
       <ComponentRef Id="cmp_root_App_src_DbMigration_WebAuth_psm1" />
       <ComponentRef Id="cmp_root_App_Start_PortableDbMigrationWeb_ps1" />
