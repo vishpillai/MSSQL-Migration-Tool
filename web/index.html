@@ -746,6 +746,8 @@
         <input id="password" type="password" autocomplete="current-password" required>
         <label class="check" style="margin-top:12px"><input id="remember-username" type="checkbox"> Remember username on this device</label>
         <div class="muted">Only the username is saved in this browser. Your password and sign-in session are not saved by this option.</div>
+        <label class="check"><input id="remember-credentials" type="checkbox"> Save username and password on this device</label>
+        <div class="muted">The saved password is kept in this browser's local storage and is readable by anyone using this browser profile. Do not use on shared computers.</div>
         <button style="margin-top:16px;width:100%">Sign in</button>
         <div id="login-error" class="error" role="alert"></div>
       </form>
@@ -1141,8 +1143,18 @@
     const migrationSetupStateKey = "dbMigrationSetupExpanded.v1";
     const patchPanelStateKey = "dbMigrationPatchExpanded.v1";
     const rememberedUsernameKey = "dbMigrationRememberedUsername.v1";
+    const savedPasswordKey = "dbMigrationSavedPassword.v1";
     let currentSession = null;
     let currentBranding = null;
+
+    // UTF-8-safe base64 for locally saved sign-in passwords. Obfuscation only, not encryption.
+    function encodeSavedPassword(value) {
+      return btoa(String.fromCharCode(...new TextEncoder().encode(String(value))));
+    }
+
+    function decodeSavedPassword(value) {
+      return new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)));
+    }
 
     function loadHistory() {
       try {
@@ -3904,7 +3916,13 @@
         });
         $("first-run-setup-form").reset();
         try {
-          if ($("remember-username").checked) localStorage.setItem(rememberedUsernameKey, username);
+          if ($("remember-credentials").checked) {
+            localStorage.setItem(rememberedUsernameKey, username);
+            localStorage.setItem(savedPasswordKey, encodeSavedPassword(password));
+            $("remember-username").checked = true;
+          } else if ($("remember-username").checked) {
+            localStorage.setItem(rememberedUsernameKey, username);
+          }
         } catch (_) {}
         firstRunSetupRequired = false;
         showApplication(session.authenticated, "Application", session.username, session);
@@ -4480,8 +4498,14 @@
         const username = $("username").value.trim();
         const session = await api("/api/login", { Username: username, Password: $("password").value });
         try {
-          if ($("remember-username").checked) localStorage.setItem(rememberedUsernameKey, username);
-          else localStorage.removeItem(rememberedUsernameKey);
+          if ($("remember-credentials").checked) {
+            localStorage.setItem(rememberedUsernameKey, username);
+            localStorage.setItem(savedPasswordKey, encodeSavedPassword($("password").value));
+          } else {
+            localStorage.removeItem(savedPasswordKey);
+            if ($("remember-username").checked) localStorage.setItem(rememberedUsernameKey, username);
+            else localStorage.removeItem(rememberedUsernameKey);
+          }
         } catch (error) {
           $("login-error").textContent = `Signed in, but the username could not be saved: ${error.message}`;
         }
@@ -4498,11 +4522,28 @@
         $("username").value = rememberedUsername;
         $("remember-username").checked = true;
       }
+      const savedPassword = localStorage.getItem(savedPasswordKey);
+      if (rememberedUsername && savedPassword) {
+        $("password").value = decodeSavedPassword(savedPassword);
+        $("remember-credentials").checked = true;
+      }
     } catch (_) {}
 
     $("remember-username").addEventListener("change", () => {
       if (!$("remember-username").checked) {
-        try { localStorage.removeItem(rememberedUsernameKey); } catch (_) {}
+        $("remember-credentials").checked = false;
+        try {
+          localStorage.removeItem(rememberedUsernameKey);
+          localStorage.removeItem(savedPasswordKey);
+        } catch (_) {}
+      }
+    });
+
+    $("remember-credentials").addEventListener("change", () => {
+      if ($("remember-credentials").checked) {
+        $("remember-username").checked = true;
+      } else {
+        try { localStorage.removeItem(savedPasswordKey); } catch (_) {}
       }
     });
 
