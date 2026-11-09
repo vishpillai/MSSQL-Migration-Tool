@@ -5002,6 +5002,11 @@
           if (Number.isFinite(id) && id > eventCursor) {
             eventCursor = id;
             void appendEvent(item);
+            // A terminal run event refreshes the monitor status immediately; background
+            // browser tabs throttle the one-second status poll but still receive pushes.
+            if (item.Stage === "Migration" && ["Completed", "Failed", "Stopped"].includes(String(item.Status))) {
+              void pollMigration();
+            }
           }
         } catch (_) {}
       };
