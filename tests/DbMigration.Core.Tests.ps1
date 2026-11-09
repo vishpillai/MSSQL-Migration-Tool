@@ -1282,10 +1282,19 @@ param([string] $HostName, [int] $Port, [switch] $PortableMode, [string] $AppRoot
         $blockingListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 65535)
         $blockingListener.Start()
         try {
-            $output = @(
-                & (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -AppRoot $appRoot -Port 65535 6>&1 |
-                    ForEach-Object { $_.ToString() }
-            ) -join "`n"
+            # The launcher's throw is script-terminating for an in-process '&' caller
+            # (its $ErrorActionPreference = 'Stop' crosses the call boundary), so the
+            # message cannot be captured through 6>&1 alone; catch it as well.
+            $output = ''
+            try {
+                $output = @(
+                    & (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -AppRoot $appRoot -Port 65535 6>&1 |
+                        ForEach-Object { $_.ToString() }
+                ) -join "`n"
+            }
+            catch {
+                $output = @($output, $_.Exception.Message | Where-Object { $_ }) -join "`n"
+            }
             $output | Should -Match 'Could not find a free loopback port near 65535'
             $output | Should -Not -Match 'out of the range of valid values'
         }
