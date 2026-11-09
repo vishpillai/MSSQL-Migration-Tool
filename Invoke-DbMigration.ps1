@@ -270,7 +270,13 @@ foreach ($pair in $configuration.SourceTargets) {
     # Logins aligned to databases that will not exist on the target are skipped during
     # server-object migration. If the target check fails, no login is excluded (safer default).
     $unmigratedSourceDatabases = [System.Collections.Generic.List[string]]::new()
-    if ([bool]$configuration.MigrateLogins -and $databases.Count -gt 0) {
+    if ($configuration.Contains('LoginExcludedDatabases') -and @($configuration.LoginExcludedDatabases).Count -gt 0) {
+        # Web plan workers intentionally see no databases; the plan computes the absent set instead.
+        foreach ($excludedName in @($configuration.LoginExcludedDatabases)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$excludedName)) { $unmigratedSourceDatabases.Add([string]$excludedName) }
+        }
+    }
+    elseif ([bool]$configuration.MigrateLogins -and $databases.Count -gt 0) {
         foreach ($database in $databases) {
             try {
                 $loginTargetSettings = Get-MigrationDatabaseTargetSettings -SourceDatabase $database.Name `
@@ -356,7 +362,9 @@ foreach ($pair in $configuration.SourceTargets) {
                         -Database '*' -Stage "$($serverStep.Name):$objectType" -Status $eventStatus `
                         -Message ((@($objectName, $objectMessage) | Where-Object { $_ }) -join ': ')
                 }
-                $serverObject
+                # Re-emit only well-formed result objects; dbatools internals can leak SMO/data
+                # objects whose console formatting throws PropertyNotFoundException downstream.
+                if ($null -ne $serverObject -and $serverObject.PSObject.Properties.Name -contains 'Status') { $serverObject }
             }
             if ($stepHadPhaseFailure) {
                 $migrationResults.Add([pscustomobject]@{

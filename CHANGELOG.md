@@ -5,6 +5,8 @@ follow semantic versioning.
 
 ## Unreleased
 
+- Fixed the server-object stage failing the whole run with `The property 'Properties' cannot be found on this object`: dbatools permission-sync internals can leak non-result objects into the phase output pipeline, and serializing them for the console escaped the phase guard. Each phase now drops pipeline debris before streaming, and the runner forwards only well-formed result objects.
+- Login alignment now also applies to browser-driven runs: the plan computes which planned databases are absent on the target and hands them to the server-object worker, whose database list is intentionally empty by design. Direct `Invoke-DbMigration.ps1` runs keep computing the set from the configured database list.
 - Added application self-update: Administration shows the installed build versus the latest published commit, and Super Admins can apply it in place; a detached updater preserves configuration, accounts, logs, reports, and migration state, then restarts the web host automatically.
 - Added real-time server-sent events at `/api/events/stream`; the web app pushes migration and patch events to the browser as they happen and keeps one-second polling as an automatic fallback.
 - Fixed migration start crashing with `The property 'TargetMinCompatibilityLevel' cannot be found` when a target compatibility level was chosen: pair discovery now caches the target's supported compatibility-level bounds for plan validation, and a missing cache entry produces a clear run-discovery-again message instead of a strict-mode error.

@@ -326,6 +326,31 @@ try {
             $serverConfiguration.RepairOrphanUsers = $false
             $serverConfiguration.UpdateStatistics = $false
             $serverConfiguration.InstallOlaHallengren = [bool]$serverOptions.InstallOlaHallengren
+            # Logins aligned to planned databases that are absent on the target are skipped during
+            # login migration; the server worker sees no databases by design, so the plan computes
+            # the absent set here. A failed target check excludes nothing (safer default).
+            $loginExcludedDatabases = [System.Collections.Generic.List[string]]::new()
+            if ($serverConfiguration.MigrateLogins) {
+                foreach ($plannedDatabase in @($pairPlan.Databases)) {
+                    $plannedTargetName = if ($plannedDatabase.Contains('TargetDatabase') -and $plannedDatabase.TargetDatabase) {
+                        [string]$plannedDatabase.TargetDatabase
+                    }
+                    else {
+                        [string]$plannedDatabase.Database
+                    }
+                    try {
+                        if (-not (Test-MigrationDatabaseExists -SqlInstance $pair.Target -Database $plannedTargetName)) {
+                            $loginExcludedDatabases.Add([string]$plannedDatabase.Database)
+                        }
+                    }
+                    catch {
+                        Write-MigrationProgressEvent -ProgressPath $fullProgressPath -Source $pair.Source -Target $pair.Target `
+                            -Stage 'ServerObjects' -Status 'InProgress' `
+                            -Message "Login alignment check skipped for '$($plannedDatabase.Database)': $($_.Exception.Message)"
+                    }
+                }
+            }
+            $serverConfiguration.LoginExcludedDatabases = $loginExcludedDatabases.ToArray()
             $serverWorkerResult = Invoke-MigrationWorker -WorkerConfiguration $serverConfiguration `
                 -WorkerName "pair-$pairIndex-server-objects"
             $serverRows = @($serverWorkerResult.Rows)

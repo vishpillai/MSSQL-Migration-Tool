@@ -72,6 +72,25 @@ Describe 'Server object migration' {
         }
     }
 
+    It 'drops pipeline debris and contains mid-stream crashes while jobs continue' {
+        InModuleScope DbMigration.PostMigration {
+            Mock Copy-DbaLogin {
+                [pscustomobject]@{ SourceServer = 's'; DestinationServer = 't'; Name = 'login1'; Type = 'Login - SqlLogin'; Status = 'Successful'; Notes = '' }
+                [System.Data.DataTable]::new()
+                throw [System.Management.Automation.PropertyNotFoundException]::new("The property 'Properties' cannot be found on this object. Verify that the property exists.")
+            }
+            Mock Copy-DbaAgentJob { [pscustomobject]@{ SourceServer = 's'; DestinationServer = 't'; Name = 'job1'; Type = 'Agent Job'; Status = 'Successful'; Notes = '' } }
+            Mock Copy-DbaAgentOperator { }
+
+            $results = @(Invoke-ServerObjectMigration -Pair @{ Source = 's'; Target = 't' })
+
+            @($results | Where-Object { $_ -is [System.Data.DataTable] }).Count | Should -Be 0
+            @($results | Where-Object Name -eq 'login1').Count | Should -Be 1
+            @($results | Where-Object Name -eq 'job1').Count | Should -Be 1
+            @($results | Where-Object { $_.Type -eq 'Login phase' -and $_.Status -eq 'Failed' }).Count | Should -Be 1
+        }
+    }
+
     It 'copies every login except sa when no databases are excluded' {
         InModuleScope DbMigration.PostMigration {
             Mock Get-MigrationDatabaseAlignedLogin { throw 'alignment must not run without excluded databases' }
@@ -85,6 +104,16 @@ Describe 'Server object migration' {
             $script:capturedExclude.Count | Should -Be 1
             $script:capturedExclude[0] | Should -Be 'sa'
         }
+    }
+}
+
+Describe 'Server-object login alignment wiring' {
+    It 'passes planned-but-absent databases from the web plan to the runner' {
+        $planText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Invoke-DbMigrationWebPlan.ps1') -Raw
+        $runnerText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Invoke-DbMigration.ps1') -Raw
+        $planText | Should -Match 'LoginExcludedDatabases'
+        $runnerText | Should -Match 'configuration\.LoginExcludedDatabases'
+        $runnerText | Should -Match '-ExcludedDatabases \$unmigratedSourceDatabases'
     }
 }
 

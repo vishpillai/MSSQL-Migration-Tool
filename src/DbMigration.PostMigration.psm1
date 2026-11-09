@@ -115,7 +115,12 @@ function Invoke-ServerObjectMigration {
                     }
                 }
             }
-            Copy-DbaLogin -Source $Pair.Source -Destination $Pair.Target -ExcludeLogin $excludedLogins.ToArray() -Force -EnableException
+            # Only well-formed result objects may stream on: dbatools internals occasionally leak
+            # SMO/data objects whose console serialization downstream throws PropertyNotFoundException.
+            Copy-DbaLogin -Source $Pair.Source -Destination $Pair.Target -ExcludeLogin $excludedLogins.ToArray() -Force -EnableException |
+                ForEach-Object {
+                    if ($null -ne $_ -and $_.PSObject.Properties.Name -contains 'Status') { $_ }
+                }
         }
         catch {
             [pscustomobject]@{
@@ -132,7 +137,10 @@ function Invoke-ServerObjectMigration {
     }
     if ($MigrateAgentJobs) {
         try {
-            Copy-DbaAgentJob -Source $Pair.Source -Destination $Pair.Target -DisableOnDestination -Force -EnableException
+            Copy-DbaAgentJob -Source $Pair.Source -Destination $Pair.Target -DisableOnDestination -Force -EnableException |
+                ForEach-Object {
+                    if ($null -ne $_ -and $_.PSObject.Properties.Name -contains 'Status') { $_ }
+                }
         }
         catch {
             [pscustomobject]@{
@@ -149,7 +157,10 @@ function Invoke-ServerObjectMigration {
     }
     if ($MigrateAgentOperators) {
         try {
-            Copy-DbaAgentOperator -Source $Pair.Source -Destination $Pair.Target -Force -EnableException
+            Copy-DbaAgentOperator -Source $Pair.Source -Destination $Pair.Target -Force -EnableException |
+                ForEach-Object {
+                    if ($null -ne $_ -and $_.PSObject.Properties.Name -contains 'Status') { $_ }
+                }
         }
         catch {
             [pscustomobject]@{
