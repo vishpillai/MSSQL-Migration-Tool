@@ -219,10 +219,26 @@ try {
             $workerConfiguration.UpdateStatistics = [bool]$plan.Options.UpdateStatistics
             $workerConfiguration.InstallOlaHallengren = $false
             if ($pair.MigrationMode -eq 'SchemaOnly') {
-                $schemaResult = Invoke-DatabaseSchemaOnlyMigration -Pair $pair -Database $databaseName `
+                $schemaResults = @(Invoke-DatabaseSchemaOnlyMigration -Pair $pair -Database $databaseName `
                     -TargetDatabaseName $targetDatabaseName -TargetCompatibilityLevel $targetCompatibilityLevel `
-                    -Overwrite ([bool]$databasePlan.Overwrite) -ProgressPath $fullProgressPath `
-                    -ControlPath $fullControlPath
+                    -Overwrite ([bool]$databasePlan.Overwrite) `
+                    -SkipUsersWithoutTargetLogins ([bool]$pairPlan.SkipUsersWithoutTargetLogins) `
+                    -ProgressPath $fullProgressPath `
+                    -ControlPath $fullControlPath)
+                $schemaResult = @($schemaResults | Where-Object {
+                    $null -ne $_ -and $_.PSObject.Properties.Name -contains 'Status' -and
+                    $_.PSObject.Properties.Name -contains 'Message'
+                } | Select-Object -Last 1)
+                if ($schemaResult.Count -eq 0) {
+                    $schemaResult = [pscustomobject]@{
+                        Source = $pair.Source; Target = $pair.Target; Database = $databaseName
+                        TargetDatabase = $targetDatabaseName; Stage = 'SchemaTransfer'; Status = 'Failed'
+                        BackupPath = $null; Message = 'Schema-only migration returned no structured result.'
+                    }
+                }
+                else {
+                    $schemaResult = $schemaResult[0]
+                }
                 $migrationRows.Add($schemaResult)
                 if ($schemaResult.Status -eq 'Failed') {
                     $runFailed = $true

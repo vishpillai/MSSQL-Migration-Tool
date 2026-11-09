@@ -2190,8 +2190,8 @@
         if ($("remember-settings").checked) {
           localStorage.setItem(settingsKey, JSON.stringify({
             remember: true,
-            pairs: pairs.map(({ Source, Target, BackupPath, MigrationMode }) =>
-              ({ Source, Target, BackupPath, MigrationMode }))
+            pairs: pairs.map(({ Source, Target, BackupPath, MigrationMode, SkipUsersWithoutTargetLogins }) =>
+              ({ Source, Target, BackupPath, MigrationMode, SkipUsersWithoutTargetLogins }))
           }));
         } else {
           localStorage.removeItem(settingsKey);
@@ -2232,12 +2232,13 @@
               Target: isTemplateValue(item.Target) ? "" : item.Target || "",
               BackupPath: /backup-share/i.test(item.BackupPath || "") ? "" : item.BackupPath || "",
               MigrationMode: migrationMode,
+              SkipUsersWithoutTargetLogins: item.SkipUsersWithoutTargetLogins === true,
               LinkedServers: [],
               LinkedServersLoaded: false,
               databases: null
             };
           });
-        if (!pairs.length) pairs = [{ Source: "", Target: "", BackupPath: "", MigrationMode: "Full", LinkedServers: [], LinkedServersLoaded: false, databases: null }];
+        if (!pairs.length) pairs = [{ Source: "", Target: "", BackupPath: "", MigrationMode: "Full", SkipUsersWithoutTargetLogins: false, LinkedServers: [], LinkedServersLoaded: false, databases: null }];
         renderPairs();
         refreshLinkedServerPairSelector();
         refreshCustomSqlPairs();
@@ -2960,6 +2961,18 @@
         }
         modeSelect.value = pair.MigrationMode || "Full";
         modeWrapper.append(modeLabel, modeSelect);
+        const skipMissingUsersLabel = document.createElement("label");
+        skipMissingUsersLabel.className = "check";
+        skipMissingUsersLabel.style.marginTop = "8px";
+        skipMissingUsersLabel.hidden = modeSelect.value !== "SchemaOnly";
+        const skipMissingUsers = document.createElement("input");
+        skipMissingUsers.type = "checkbox";
+        skipMissingUsers.dataset.pairIndex = String(index);
+        skipMissingUsers.dataset.skipUsersWithoutTargetLogins = "true";
+        skipMissingUsers.checked = pair.SkipUsersWithoutTargetLogins === true;
+        skipMissingUsers.disabled = Boolean(pair.validationRunning || pair.readinessRunning);
+        skipMissingUsersLabel.append(skipMissingUsers, document.createTextNode("Skip database users whose login is missing on target"));
+        modeWrapper.append(skipMissingUsersLabel);
         grid.append(modeWrapper);
         const actions = document.createElement("div");
         actions.className = "row";
@@ -4002,6 +4015,12 @@
 
     $("pair-list").addEventListener("change", (event) => {
       const target = event.target;
+      if (target.matches("[data-skip-users-without-target-logins]")) {
+        const pair = pairs[Number(target.dataset.pairIndex)];
+        pair.SkipUsersWithoutTargetLogins = target.checked;
+        saveSettings();
+        return;
+      }
       const field = target.closest?.("[data-field]");
       if (field) {
         const pair = pairs[Number(field.dataset.pairIndex)];
@@ -4610,6 +4629,7 @@
         Target: pair.Target,
         BackupPath: pair.BackupPath,
         MigrationMode: pair.MigrationMode || "Full",
+        SkipUsersWithoutTargetLogins: pair.MigrationMode === "SchemaOnly" && pair.SkipUsersWithoutTargetLogins === true,
         Databases: pair.databases.filter((database) => database.Selected).map((database) => ({
           Database: database.Database,
           TargetDatabase: database.TargetDatabase,
@@ -4617,6 +4637,10 @@
           Overwrite: database.Overwrite
         }))
       }));
+      if (planPairs.length === 0) {
+        $("migration-error").textContent = "Configure a source/target pair and discover it before starting a migration or server-level action.";
+        return;
+      }
       const selectedCount = planPairs.reduce((sum, pair) => sum + pair.Databases.length, 0);
       const allowedCompatibilityLevels = [90, 100, 110, 120, 130, 140, 150, 160, 170];
       for (const pair of planPairs) {

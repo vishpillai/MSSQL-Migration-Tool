@@ -475,6 +475,7 @@ function Invoke-DatabaseSchemaOnlyMigration {
         [Parameter()][string] $TargetDatabaseName = '',
         [Parameter()][Nullable[int]] $TargetCompatibilityLevel,
         [Parameter(Mandatory)][bool] $Overwrite,
+        [Parameter()][bool] $SkipUsersWithoutTargetLogins = $false,
         [Parameter()][string] $ProgressPath = '',
         [Parameter()][string] $ControlPath = ''
     )
@@ -489,6 +490,7 @@ function Invoke-DatabaseSchemaOnlyMigration {
 
     $destinationServer = $null
     $targetDatabaseCreated = $false
+    $skippedUserNames = [System.Collections.Generic.List[string]]::new()
     if ([string]::IsNullOrWhiteSpace($TargetDatabaseName)) {
         $TargetDatabaseName = $Database
     }
@@ -549,8 +551,44 @@ function Invoke-DatabaseSchemaOnlyMigration {
         $transfer.Options.FullTextStopLists = $true
         $transfer.Options.Permissions = $true
         $transfer.Options.WithDependencies = $true
+        if ($SkipUsersWithoutTargetLogins) {
+            $targetLoginNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            foreach ($targetLogin in $destinationServer.Logins) {
+                $null = $targetLoginNames.Add([string]$targetLogin.Name)
+            }
+            $skippedUsers = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            foreach ($sourceUser in $sourceDatabase.Users) {
+                if ([string]$sourceUser.UserType -notin @('SqlLogin', 'WindowsUser', 'WindowsGroup')) { continue }
+                $loginName = [string]$sourceUser.Login
+                if ([string]::IsNullOrWhiteSpace($loginName)) { $loginName = [string]$sourceUser.Name }
+                if ($loginName -and -not $targetLoginNames.Contains($loginName)) {
+                    $null = $skippedUsers.Add([string]$sourceUser.Name)
+                }
+            }
+            foreach ($skippedUser in $skippedUsers) { $skippedUserNames.Add($skippedUser) }
+            if ($skippedUserNames.Count -gt 0) {
+                $transfer.CopyAllObjects = $false
+                foreach ($copyProperty in $transfer.GetType().GetProperties([Reflection.BindingFlags]'Public,Instance') |
+                    Where-Object { $_.Name -like 'CopyAll*' -and $_.PropertyType -eq [bool] }) {
+                    $copyPropertyName = $copyProperty.Name
+                    $transfer.$copyPropertyName = $copyPropertyName -notin @('CopyAllObjects', 'CopyAllUsers', 'CopyAllLogins')
+                }
+                $transfer.ObjectList = [System.Collections.ArrayList]::new()
+                foreach ($sourceUser in $sourceDatabase.Users) {
+                    if ([string]$sourceUser.Name -notin @('sys', 'dbo', 'guest', 'INFORMATION_SCHEMA') -and
+                        -not $skippedUsers.Contains([string]$sourceUser.Name)) {
+                        $null = $transfer.ObjectList.Add($sourceUser)
+                    }
+                }
+            }
+        }
         $null = $transfer.ScriptTransfer()
-        $null = & $emit 'SchemaTransfer' 'InProgress' 30 'Schema scripting preflight completed; no data-copy operation is enabled.'
+        $scriptMessage = if ($skippedUserNames.Count -gt 0) {
+            "Schema scripting preflight completed; skipped database user(s) whose target login is absent: $($skippedUserNames -join ', '). No data-copy operation is enabled."
+        } else {
+            'Schema scripting preflight completed; no data-copy operation is enabled.'
+        }
+        $null = & $emit 'SchemaTransfer' 'InProgress' 30 $scriptMessage
 
         if (-not (Wait-MigrationControl -ControlPath $ControlPath -ProgressPath $ProgressPath `
                 -Source $Pair.Source -Target $Pair.Target -Database $Database -HonorStop)) {
@@ -562,7 +600,8 @@ function Invoke-DatabaseSchemaOnlyMigration {
 
         if ($destinationDatabase) {
             $null = & $emit 'SchemaTransfer' 'InProgress' 40 'Explicit overwrite approved; removing the existing target database before recreating schema only.'
-            Remove-DbaDatabase -SqlInstance $destinationServer -Database $TargetDatabaseName -Confirm:$false -EnableException -ErrorAction Stop
+            $null = Remove-DbaDatabase -SqlInstance $destinationServer -Database $TargetDatabaseName `
+                -Confirm:$false -EnableException -ErrorAction Stop
         }
         $schemaFileSuffix = '_migration_' + [guid]::NewGuid().ToString('N').Substring(0, 12)
         $null = New-DbaDatabase -SqlInstance $destinationServer -Name $TargetDatabaseName `
@@ -601,10 +640,13 @@ WHERE p.index_id IN (0, 1);
             -Query "SELECT COUNT_BIG(*) AS SchemaObjectCount FROM sys.objects WHERE is_ms_shipped = 0;" `
             -EnableException -ErrorAction Stop | Select-Object -Last 1
         $message = "Schema-only transfer completed; copied schema objects without table data. Verified $($objectCount.SchemaObjectCount) user objects and zero user-table rows."
+        if ($skippedUserNames.Count -gt 0) {
+            $message += " Skipped database user(s) with missing target logins: $($skippedUserNames -join ', ')."
+        }
         $null = & $emit 'SchemaTransfer' 'Completed' 100 $message
         [pscustomobject]@{
             Source = $Pair.Source; Target = $Pair.Target; Database = $Database; TargetDatabase = $TargetDatabaseName; Stage = 'SchemaTransfer'
-            Status = 'Completed'; BackupPath = $null; Message = $message
+            Status = 'Completed'; BackupPath = $null; Message = $message; SkippedUsers = @($skippedUserNames)
         }
     }
     catch {
@@ -620,7 +662,7 @@ WHERE p.index_id IN (0, 1);
         $message = $errorMessages -join ' -> '
         if ($targetDatabaseCreated) {
             try {
-                Remove-DbaDatabase -SqlInstance $destinationServer -Database $TargetDatabaseName `
+                $null = Remove-DbaDatabase -SqlInstance $destinationServer -Database $TargetDatabaseName `
                     -Confirm:$false -EnableException -ErrorAction Stop
                 $message += ' The incomplete target database created by this run was removed.'
             }
@@ -628,10 +670,13 @@ WHERE p.index_id IN (0, 1);
                 $message += " Cleanup of the incomplete target database also failed: $($_.Exception.Message)"
             }
         }
+        if ($skippedUserNames.Count -gt 0) {
+            $message += " Skipped database user(s) with missing target logins: $($skippedUserNames -join ', ')."
+        }
         $null = & $emit 'SchemaTransfer' 'Failed' 100 $message
         [pscustomobject]@{
             Source = $Pair.Source; Target = $Pair.Target; Database = $Database; TargetDatabase = $TargetDatabaseName; Stage = 'SchemaTransfer'
-            Status = 'Failed'; BackupPath = $null; Message = $message
+            Status = 'Failed'; BackupPath = $null; Message = $message; SkippedUsers = @($skippedUserNames)
         }
     }
 }

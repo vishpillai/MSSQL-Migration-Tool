@@ -996,6 +996,13 @@ function ConvertTo-WebPairs {
             Target = ([string]$pair.Target).Trim()
             BackupPath = if ($rawBackupPath) { [System.IO.Path]::GetFullPath($rawBackupPath) } else { '' }
             MigrationMode = if ($pair.Contains('MigrationMode')) { [string]$pair.MigrationMode } else { 'Full' }
+            SkipUsersWithoutTargetLogins = $false
+        }
+        if ($pair.Contains('SkipUsersWithoutTargetLogins')) {
+            if ($pair.SkipUsersWithoutTargetLogins -isnot [bool]) {
+                throw [ArgumentException]::new('SkipUsersWithoutTargetLogins must be a JSON boolean.')
+            }
+            $normalizedPair.SkipUsersWithoutTargetLogins = [bool]$pair.SkipUsersWithoutTargetLogins
         }
         if ($pair.Contains('LinkedServers')) {
             if ($pair.LinkedServers -isnot [array]) {
@@ -1043,6 +1050,9 @@ function Start-WebMigrationPlan {
     if (-not $Body.Contains('Pairs') -or $Body.Pairs -isnot [array] -or
         -not $Body.Contains('Options') -or $Body.Options -isnot [System.Collections.IDictionary]) {
         throw [ArgumentException]::new('Pairs and Options are required.')
+    }
+    if ($Body.Pairs.Count -lt 1 -or $Body.Pairs.Count -gt 3) {
+        throw [ArgumentException]::new('Configure and discover at least one source/target pair before starting a migration or server-level action.')
     }
     $pairs = @(ConvertTo-WebPairs -Pairs $Body.Pairs -RequireBackupPath)
     $optionNames = @(
@@ -1195,6 +1205,7 @@ function Start-WebMigrationPlan {
             Target = $pair.Target
             BackupPath = $pair.BackupPath
             MigrationMode = $pair.MigrationMode
+            SkipUsersWithoutTargetLogins = [bool]$pair.SkipUsersWithoutTargetLogins
             Databases = @($pair.Databases | ForEach-Object {
                 @{
                     Database = [string]$_.Database

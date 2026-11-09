@@ -821,6 +821,47 @@ Describe 'Web host script safeguards' {
         $script:webHostText | Should -Match 'auto-update\.json'
         $script:webHostText | Should -Match 'buildId = \$script:BuildStamp'
     }
+
+    It 'rejects an empty migration plan before binding Pairs and guards the UI submit path' {
+        $script:webHostText | Should -Match '\$Body\.Pairs\.Count -lt 1'
+        $uiText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\web\index.html') -Raw
+        $uiText | Should -Match 'if \(planPairs\.length === 0\)'
+        $uiText | Should -Match 'Configure a source/target pair and discover it'
+    }
+}
+
+Describe 'Schema-only transfer result handling' {
+    It 'suppresses cleanup cmdlet output so failed transfers return one structured result' {
+        $transferText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\src\DbMigration.Transfer.psm1') -Raw
+        $transferText | Should -Match '\$null = Remove-DbaDatabase -SqlInstance \$destinationServer'
+    }
+
+    It 'normalizes schema-only output and preserves the underlying failure message' {
+        $planText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Invoke-DbMigrationWebPlan.ps1') -Raw
+        $planText | Should -Match '\$schemaResults = @\(Invoke-DatabaseSchemaOnlyMigration'
+        $planText | Should -Match "Schema-only migration returned no structured result\."
+        $planText | Should -Match '\$schemaResult\.Message'
+    }
+}
+
+Describe 'Schema-only missing target login option' {
+    It 'defaults off and selectively adds only users whose server login exists on target' {
+        $transferText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\src\DbMigration.Transfer.psm1') -Raw
+        $transferText | Should -Match 'SkipUsersWithoutTargetLogins = \$false'
+        $transferText | Should -Match 'CopyAllUsers'
+        $transferText | Should -Match 'ObjectList\.Add\(\$sourceUser\)'
+        $transferText | Should -Match "'sys', 'dbo', 'guest', 'INFORMATION_SCHEMA'"
+        $transferText | Should -Match 'Skipped database user\(s\) with missing target logins'
+    }
+
+    It 'validates and carries the option through the web plan' {
+        $webHostText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Invoke-DbMigrationWeb.ps1') -Raw
+        $planText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Invoke-DbMigrationWebPlan.ps1') -Raw
+        $uiText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\web\index.html') -Raw
+        $webHostText | Should -Match 'SkipUsersWithoutTargetLogins must be a JSON boolean'
+        $planText | Should -Match '-SkipUsersWithoutTargetLogins \(\[bool\]\$pairPlan\.SkipUsersWithoutTargetLogins\)'
+        $uiText | Should -Match 'data-skip-users-without-target-logins'
+    }
 }
 
 Describe 'Web pair backup path requirement' {
