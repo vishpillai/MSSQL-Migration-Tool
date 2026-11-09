@@ -141,6 +141,12 @@ $script:LoginAttempts = @{}
 $script:SetupAttempts = @{}
 $script:AdminReauthAttempts = @{}
 $script:DiscoveryByPair = @{}
+$script:SseClients = [System.Collections.Generic.List[object]]::new()
+$script:UpdateInfo = $null
+$script:UpdateInfoCheckedUtc = [DateTime]::MinValue
+$script:UpdateRepoApiBase = 'https://api.github.com/repos/vishpillai/MSSQL-Migration-Tool'
+$script:UpdateZipUrl = 'https://codeload.github.com/vishpillai/MSSQL-Migration-Tool/zip/refs/heads/main'
+$script:SelfUpdatePending = $false
 $script:MigrationProcess = $null
 $script:PatchProcess = $null
 $script:PatchRunId = $null
@@ -396,6 +402,226 @@ function Find-WebApplicationUser {
 
 function Save-WebApplicationAuthStore {
     Save-MigrationWebAuthRecord -Record $script:AuthRecord -Path $fullAuthPath
+}
+
+function Get-WebAppBuildInfo {
+    [CmdletBinding()]
+    param()
+
+    $info = [ordered]@{ Version = ''; CommitSha = ''; InstalledAtUtc = '' }
+    $appInfoPath = Join-Path $script:AppRoot 'appinfo.json'
+    if (Test-Path -LiteralPath $appInfoPath -PathType Leaf) {
+        try {
+            $appInfo = Get-Content -LiteralPath $appInfoPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            if ($appInfo.Version) { $info.Version = [string]$appInfo.Version }
+            if ($appInfo.PSObject.Properties['CommitSha'] -and $appInfo.CommitSha) { $info.CommitSha = [string]$appInfo.CommitSha }
+            if ($appInfo.InstalledAtUtc) { $info.InstalledAtUtc = [string]$appInfo.InstalledAtUtc }
+        }
+        catch {
+            Write-WebHostLog -Level Warning -Message "Could not read appinfo.json: $($_.Exception.Message)"
+        }
+    }
+    $versionPath = Join-Path $script:AppRoot 'VERSION'
+    if (-not $info.Version -and (Test-Path -LiteralPath $versionPath -PathType Leaf)) {
+        $info.Version = (Get-Content -LiteralPath $versionPath -Raw).Trim()
+    }
+    [pscustomobject]$info
+}
+
+function Get-WebUpdateInfo {
+    <#
+    .SYNOPSIS
+        Compares the installed build with the latest published commit on the source
+        repository. Results are cached for 24 hours; -Refresh forces a recheck.
+    #>
+    [CmdletBinding()]
+    param([Parameter()][switch] $Refresh)
+
+    if ($script:UpdateInfo -and -not $Refresh -and
+        $script:UpdateInfoCheckedUtc -gt [DateTime]::UtcNow.AddHours(-24)) {
+        return $script:UpdateInfo
+    }
+
+    $build = Get-WebAppBuildInfo
+    $result = [ordered]@{
+        checkedAt = [DateTime]::UtcNow.ToString('o')
+        currentVersion = [string]$build.Version
+        currentCommit = [string]$build.CommitSha
+        latestCommit = $null
+        latestCommitDate = $null
+        latestCommitSubject = $null
+        commitsBehind = $null
+        updateAvailable = $false
+        error = $null
+    }
+    try {
+        $gitHubHeaders = @{ 'User-Agent' = 'DbMigrationTool'; Accept = 'application/vnd.github+json' }
+        $commit = Invoke-RestMethod -Uri "$script:UpdateRepoApiBase/commits/main" -Headers $gitHubHeaders -TimeoutSec 8 -ErrorAction Stop
+        $result.latestCommit = [string]$commit.sha
+        $result.latestCommitDate = [string]$commit.commit.committer.date
+        $result.latestCommitSubject = [string](($commit.commit.message -split "`n")[0])
+        if ($build.CommitSha) {
+            if ($build.CommitSha -eq $result.latestCommit) {
+                $result.commitsBehind = 0
+            }
+            else {
+                $compare = Invoke-RestMethod -Uri "$script:UpdateRepoApiBase/compare/$($build.CommitSha)...main" -Headers $gitHubHeaders -TimeoutSec 8 -ErrorAction Stop
+                $result.commitsBehind = [int]$compare.behind_by
+            }
+            $result.updateAvailable = $result.commitsBehind -gt 0
+        }
+        else {
+            # Builds without a commit stamp compare the install timestamp against the latest commit date.
+            $installedAt = [DateTime]::MinValue
+            if ($build.InstalledAtUtc) { [void][DateTime]::TryParse([string]$build.InstalledAtUtc, [ref]$installedAt) }
+            $latestDate = [DateTime]::Parse([string]$commit.commit.committer.date).ToUniversalTime()
+            $result.updateAvailable = $latestDate -gt $installedAt
+        }
+    }
+    catch {
+        $result.error = $_.Exception.Message
+    }
+    $script:UpdateInfo = [pscustomobject]$result
+    $script:UpdateInfoCheckedUtc = [DateTime]::UtcNow
+    $script:UpdateInfo
+}
+
+function Update-WebEventStreams {
+    <#
+    .SYNOPSIS
+        Drains migration/patch event sources and pushes new events to attached
+        server-sent-event clients. Runs inside the accept loop's idle wait, so it must
+        never throw: a failure is logged and the loop continues.
+    #>
+    [CmdletBinding()]
+    param()
+
+    if ($script:SseClients.Count -eq 0) { return }
+    try {
+        if ($script:ProgressPath) { Read-WebProgressFiles }
+        Read-WebProcessOutput
+    }
+    catch {
+        Write-WebHostLog -Level Warning -Message "Event stream source refresh failed: $($_.Exception.Message)"
+    }
+    $deadClients = [System.Collections.Generic.List[object]]::new()
+    foreach ($client in @($script:SseClients)) {
+        try {
+            $pendingEvents = @($script:EventBuffer | Where-Object { [int]$_.Id -gt [int]$client.Cursor })
+            foreach ($eventItem in $pendingEvents) {
+                $json = ConvertTo-Json -InputObject $eventItem -Depth 6 -Compress -ErrorAction Stop
+                $frame = [Text.Encoding]::UTF8.GetBytes("id: $($eventItem.Id)`ndata: $json`n`n")
+                $client.Stream.Write($frame, 0, $frame.Length)
+                $client.Cursor = [int]$eventItem.Id
+            }
+            if ($pendingEvents.Count -gt 0) {
+                $client.Stream.Flush()
+                $client.LastHeartbeatUtc = [DateTime]::UtcNow
+            }
+            elseif ([DateTime]::UtcNow - $client.LastHeartbeatUtc -gt [TimeSpan]::FromSeconds(15)) {
+                $heartbeat = [Text.Encoding]::UTF8.GetBytes(": heartbeat`n`n")
+                $client.Stream.Write($heartbeat, 0, $heartbeat.Length)
+                $client.Stream.Flush()
+                $client.LastHeartbeatUtc = [DateTime]::UtcNow
+            }
+        }
+        catch {
+            $deadClients.Add($client)
+        }
+    }
+    foreach ($client in $deadClients) {
+        try { $client.Response.Close() } catch { }
+        $null = $script:SseClients.Remove($client)
+    }
+}
+
+function Start-WebSelfUpdate {
+    <#
+    .SYNOPSIS
+        Downloads the latest application build and hands off to a detached updater that
+        waits for this host to exit, overlays the new files (preserving configuration,
+        accounts, logs, reports, and migration state), and relaunches the host with its
+        original command line.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $updateRoot = Join-Path ([System.IO.Path]::GetTempPath()) "DbMigrationUpdate-$([guid]::NewGuid().ToString('N'))"
+    $zipPath = Join-Path $updateRoot 'update.zip'
+    $stagingPath = Join-Path $updateRoot 'files'
+    $null = New-Item -ItemType Directory -Path $stagingPath -Force -ErrorAction Stop
+    try {
+        $previousProgressPreference = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            Invoke-WebRequest -Uri $script:UpdateZipUrl -OutFile $zipPath -TimeoutSec 300 -ErrorAction Stop
+        }
+        finally {
+            $ProgressPreference = $previousProgressPreference
+        }
+        Expand-Archive -LiteralPath $zipPath -DestinationPath $stagingPath -Force -ErrorAction Stop
+        $sourcePath = @(@(Get-ChildItem -LiteralPath $stagingPath -Directory))[0].FullName
+        if (-not (Test-Path -LiteralPath (Join-Path $sourcePath 'Invoke-DbMigrationWeb.ps1') -PathType Leaf)) {
+            throw 'The downloaded update package is missing the application files.'
+        }
+        $updaterPath = Join-Path $updateRoot 'Apply-DbMigrationUpdate.ps1'
+        Set-Content -LiteralPath $updaterPath -Encoding UTF8 -ErrorAction Stop -Value @'
+param([Parameter(Mandatory)][string] $SettingsPath)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$settings = Get-Content -LiteralPath $SettingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+$logPath = Join-Path (Split-Path -Parent $SettingsPath) 'update.log'
+function Write-UpdateLog([string] $Message) {
+    Add-Content -LiteralPath $logPath -Value ("{0} {1}" -f ([DateTime]::UtcNow.ToString('o')), $Message) -Encoding utf8
+}
+try {
+    Write-UpdateLog "Waiting for web host process $($settings.HostProcessId) to exit."
+    $deadline = [DateTime]::UtcNow.AddMinutes(5)
+    while ((Get-Process -Id ([int]$settings.HostProcessId) -ErrorAction SilentlyContinue) -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+    }
+    if (Get-Process -Id ([int]$settings.HostProcessId) -ErrorAction SilentlyContinue) {
+        throw "Web host process $($settings.HostProcessId) did not exit within 5 minutes."
+    }
+    Write-UpdateLog "Applying update to '$($settings.AppRoot)' (configuration, portable data, reports, and state are preserved)."
+    & robocopy.exe $settings.SourcePath $settings.AppRoot /MIR /R:2 /W:2 /XD config portable reports .git /XF appinfo.json MigrationState.json /NFL /NDL /NJH /NP | Out-Null
+    if ($LASTEXITCODE -gt 7) { throw "File copy failed with robocopy exit code $LASTEXITCODE." }
+    Write-UpdateLog "Files copied (robocopy exit code $LASTEXITCODE)."
+    $version = ''
+    $versionPath = Join-Path $settings.AppRoot 'VERSION'
+    if (Test-Path -LiteralPath $versionPath -PathType Leaf) { $version = (Get-Content -LiteralPath $versionPath -Raw).Trim() }
+    [ordered]@{
+        Name = 'Db Migration Tool'
+        Version = $version
+        CommitSha = [string]$settings.CommitSha
+        InstalledAtUtc = [DateTime]::UtcNow.ToString('o')
+        InstallPath = [string]$settings.AppRoot
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $settings.AppRoot 'appinfo.json') -Encoding UTF8
+    Write-UpdateLog 'Relaunching the web host.'
+    Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', ([string]$settings.RelaunchCommandLine) -WorkingDirectory ([string]$settings.AppRoot) -WindowStyle Hidden
+    Write-UpdateLog 'Update completed.'
+}
+catch {
+    Write-UpdateLog "UPDATE FAILED: $($_.Exception.Message)"
+    exit 1
+}
+'@
+        $relaunchCommandLine = [string](Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop).CommandLine
+        $settingsPath = Join-Path $updateRoot 'update-settings.json'
+        [ordered]@{
+            HostProcessId = $PID
+            SourcePath = $sourcePath
+            AppRoot = [string]$script:AppRoot
+            CommitSha = if ($script:UpdateInfo -and $script:UpdateInfo.latestCommit) { [string]$script:UpdateInfo.latestCommit } else { '' }
+            RelaunchCommandLine = $relaunchCommandLine
+        } | ConvertTo-Json | Set-Content -LiteralPath $settingsPath -Encoding UTF8 -ErrorAction Stop
+        Start-Process -FilePath 'pwsh.exe' -WindowStyle Hidden -ErrorAction Stop `
+            -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -SettingsPath "{1}"' -f $updaterPath, $settingsPath)
+    }
+    catch {
+        Remove-Item -LiteralPath $updateRoot -Recurse -Force -ErrorAction SilentlyContinue
+        throw
+    }
 }
 
 function Get-WebSession {
@@ -1256,6 +1482,7 @@ if ($script:SetupToken) {
 Write-Output "Web host log: $($script:HostLogPath)"
 Write-Output 'Use Ctrl+C to stop the web host. Do not stop the host while a migration is running.'
 Write-WebHostLog -Level Information -Message "Web host started at $($script:Origin)."
+$null = Get-WebUpdateInfo
 try {
     while ($script:Listener.IsListening) {
         # Accept with a bounded async wait: a blocking GetContext() cannot be interrupted
@@ -1263,7 +1490,7 @@ try {
         # 250 ms, so an operator's Ctrl+C is honored promptly even when idle.
         $contextTask = $script:Listener.GetContextAsync()
         try {
-            while (-not $contextTask.Wait(250)) { }
+            while (-not $contextTask.Wait(250)) { Update-WebEventStreams }
         }
         catch [System.Management.Automation.PipelineStoppedException] {
             throw
@@ -1279,6 +1506,7 @@ try {
         $script:CurrentAuditRequestId = [guid]::NewGuid().ToString('N')
         $script:CurrentAuditClientAddress = [string]$request.RemoteEndPoint.Address
         $session = $null
+        $detachResponse = $false
         try {
             $hostHeader = $request.UserHostName
             if (-not [string]::Equals($hostHeader, "$($script:HostName):$($script:Port)", [StringComparison]::OrdinalIgnoreCase) -and
@@ -1544,7 +1772,7 @@ try {
                 '^/api/(custom-sql|discover-instance)$' { 'CustomSql|Patching'; break }
                 '^/api/disk-usage$' { 'DiskUsage'; break }
                 '^/api/live-monitor$' { 'LiveMonitor'; break }
-                '^/api/(reporting|audit|events)$' { 'LogsAudit'; break }
+                '^/api/(reporting|audit|events|events/stream)$' { 'LogsAudit'; break }
                 '^/api/admin/reset-logs$|^/api/patch/status$' {
                     if ($path -eq '/api/patch/status') { 'Patching' } else { 'LogsAudit' }
                     break
@@ -2841,6 +3069,52 @@ ORDER BY volumes.volume_mount_point;
                 }
                 continue
             }
+            if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/update/check') {
+                $refreshUpdateInfo = $request.QueryString['refresh'] -eq 'true' -and $session.Role -eq 'SuperAdmin'
+                $updateInfo = Get-WebUpdateInfo -Refresh:$refreshUpdateInfo
+                Send-WebJson -Response $response -StatusCode 200 -Value $updateInfo
+                continue
+            }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/admin/update') {
+                if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
+                    ($script:PatchProcess -and -not $script:PatchProcess.HasExited)) {
+                    throw [System.InvalidOperationException]::new('Application updates are unavailable while a migration or patch is running.')
+                }
+                $updateInfo = Get-WebUpdateInfo -Refresh
+                if ($updateInfo.error) {
+                    throw [System.InvalidOperationException]::new("Update check failed: $($updateInfo.error)")
+                }
+                if (-not $updateInfo.updateAvailable) {
+                    Send-WebJson -Response $response -StatusCode 200 -Value @{ updating = $false; message = 'The application is already up to date.' }
+                    continue
+                }
+                Write-WebAuditRecord -Action 'Application self-update started' -Actor $session.Username -Outcome 'Requested' -Details @{
+                    LatestCommit = [string]$updateInfo.latestCommit
+                }
+                Start-WebSelfUpdate
+                Send-WebJson -Response $response -StatusCode 202 -Value @{ updating = $true; message = 'Update downloaded. The web host is restarting; refresh this page in about 30 seconds.' }
+                $response.Close()
+                $detachResponse = $true
+                $script:SelfUpdatePending = $true
+                $script:Listener.Stop()
+                continue
+            }
+            if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/events/stream') {
+                $streamAfter = 0
+                if ($request.QueryString['after']) { $streamAfter = [int]$request.QueryString['after'] }
+                $response.StatusCode = 200
+                $response.ContentType = 'text/event-stream; charset=utf-8'
+                $response.Headers['Cache-Control'] = 'no-cache'
+                $response.SendChunked = $true
+                $script:SseClients.Add(@{
+                    Response = $response
+                    Stream = $response.OutputStream
+                    Cursor = $streamAfter
+                    LastHeartbeatUtc = [DateTime]::UtcNow
+                })
+                $detachResponse = $true
+                continue
+            }
             if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -eq '/api/events') {
                 Read-WebProgressFiles
                 Read-WebProcessOutput
@@ -2898,7 +3172,9 @@ ORDER BY volumes.volume_mount_point;
             }
         }
         finally {
-            $response.Close()
+            if (-not $detachResponse) {
+                $response.Close()
+            }
         }
     }
 }
@@ -2911,6 +3187,13 @@ catch {
 }
 finally {
     Write-WebHostLog -Level Information -Message 'Web host is shutting down.'
+    foreach ($sseClient in @($script:SseClients)) {
+        try { $sseClient.Response.Close() } catch { }
+    }
+    $script:SseClients.Clear()
+    if ($script:SelfUpdatePending) {
+        Write-WebHostLog -Level Information -Message 'Web host is restarting to apply an application update.'
+    }
     $script:Listener.Stop()
     $script:Listener.Close()
     if ($script:HasInstanceLock) {

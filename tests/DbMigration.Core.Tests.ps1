@@ -774,6 +774,18 @@ Describe 'Web host script safeguards' {
         $script:webHostText | Should -Match 'TargetMaxCompatibilityLevel = \[int\]\$_.TargetMaxCompatibilityLevel'
         $script:webHostText | Should -Match 'if \(\$null -eq \$knownDatabase\)'
     }
+
+    It 'streams migration events over SSE without closing the connection per request' {
+        $script:webHostText | Should -Match "'/api/events/stream'"
+        $script:webHostText | Should -Match 'text/event-stream'
+        $script:webHostText | Should -Match 'if \(-not \$detachResponse\)'
+    }
+
+    It 'stages self-updates behind Super Admin and preserves data paths' {
+        $script:webHostText | Should -Match "'/api/admin/update'"
+        $script:webHostText | Should -Match '/XD config portable reports'
+        $script:webHostText | Should -Match '/XF appinfo\.json MigrationState\.json'
+    }
 }
 
 Describe 'Web pair backup path requirement' {

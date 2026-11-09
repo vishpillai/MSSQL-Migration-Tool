@@ -810,6 +810,16 @@
             <div id="branding-error" class="error" role="alert"></div>
           </form>
         </section>
+        <section class="card" style="margin-top:16px">
+          <h3>Application update</h3>
+          <p class="muted">Checks the source repository for a newer build. Applying an update downloads the latest files and restarts this web app; configuration, accounts, logs, reports, and migration state are preserved.</p>
+          <p id="update-status" class="muted" role="status">Update status has not been checked yet.</p>
+          <div class="row">
+            <button id="update-check" class="secondary" type="button">Check now</button>
+            <button id="update-apply" type="button" disabled>Update and restart</button>
+          </div>
+          <div id="update-error" class="error" role="alert"></div>
+        </section>
       </section>
       <section id="reporting-workspace" class="card" data-feature="LogsAudit">
         <h2>Logs &amp; audit</h2>
@@ -4962,6 +4972,7 @@
         }
         setRunControlsLocked(migrationActive || patchActive);
         if (hasFeature("LogsAudit")) {
+          connectMigrationEventStream();
           const result = await api(`/api/events?after=${eventCursor}`);
           const suppressEvents = suppressExistingEventReplay;
           for (const item of result.events) {
@@ -4979,12 +4990,91 @@
       }
     }
 
+    let migrationEventSource = null;
+    let migrationEventStreamDisabled = false;
+    function connectMigrationEventStream() {
+      if (migrationEventStreamDisabled || migrationEventSource || !window.EventSource || !hasFeature("LogsAudit")) return;
+      const source = new EventSource(`/api/events/stream?after=${eventCursor}`);
+      source.onmessage = (message) => {
+        try {
+          const item = JSON.parse(message.data);
+          const id = Number(item && item.Id);
+          if (Number.isFinite(id) && id > eventCursor) {
+            eventCursor = id;
+            void appendEvent(item);
+          }
+        } catch (_) {}
+      };
+      source.onerror = () => {
+        if (source.readyState === EventSource.CLOSED) {
+          // Permanent failure (for example an older host without streaming): keep polling.
+          source.close();
+          migrationEventStreamDisabled = true;
+          migrationEventSource = null;
+        }
+      };
+      migrationEventSource = source;
+    }
+
+    async function loadUpdateInfo(refresh = false) {
+      const status = $("update-status");
+      const applyButton = $("update-apply");
+      const errorBox = $("update-error");
+      if (!status || !applyButton) return;
+      errorBox.textContent = "";
+      status.textContent = refresh ? "Checking for updates\u2026" : "Loading update status\u2026";
+      applyButton.disabled = true;
+      try {
+        const info = await api(`/api/update/check${refresh ? "?refresh=true" : ""}`);
+        if (info.error) {
+          status.textContent = `Update check failed: ${info.error}`;
+          return;
+        }
+        const latest = `${(info.latestCommit || "").substring(0, 7)} \u00b7 ${info.latestCommitSubject || "unknown"} (${info.latestCommitDate ? new Date(info.latestCommitDate).toLocaleString() : "unknown date"})`;
+        const current = `${info.currentVersion || "unknown"}${info.currentCommit ? " \u00b7 " + info.currentCommit.substring(0, 7) : ""}`;
+        if (info.updateAvailable) {
+          const behind = Number.isInteger(info.commitsBehind) ? `${info.commitsBehind} commit(s) behind` : "a newer build is published";
+          status.textContent = `Update available: ${behind}. Current: ${current}. Latest: ${latest}. Updating preserves configuration, accounts, logs, reports, and migration state.`;
+          applyButton.disabled = false;
+        } else {
+          status.textContent = `Up to date. Current: ${current}. Latest: ${latest}.`;
+        }
+      } catch (error) {
+        status.textContent = "Update check failed.";
+        errorBox.textContent = error.message;
+      }
+    }
+
+    $("update-check").addEventListener("click", () => { void loadUpdateInfo(true); });
+    $("update-apply").addEventListener("click", async () => {
+      if (!await showAppDialog({
+        title: "Update and restart?",
+        message: "Download the latest build and restart this web app? Configuration, accounts, logs, reports, and migration state are preserved. The app is unavailable for about 30 seconds.",
+        confirm: true,
+        confirmLabel: "Update now"
+      })) return;
+      $("update-apply").disabled = true;
+      $("update-check").disabled = true;
+      $("update-status").textContent = "Updating\u2026 the web host is restarting.";
+      try { await api("/api/admin/update", {}); } catch (_) { /* the host restarts before answering on some browsers */ }
+      const deadline = Date.now() + 120000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        try {
+          const probe = await fetch("/api/session", { cache: "no-store" });
+          if (probe.ok) { window.location.reload(); return; }
+        } catch (_) {}
+      }
+      $("update-error").textContent = "The host did not come back within 2 minutes. Check the host console or the update log in the update staging folder.";
+    });
+
     async function initialize() {
       try {
         const session = await api("/api/session");
         firstRunSetupRequired = Boolean(session.setupRequired);
         applyBranding(session.branding);
         showApplication(session.authenticated, session.authMode, session.username, session);
+        if (session.superAdmin) void loadUpdateInfo();
       } catch (_) {
         firstRunSetupRequired = false;
         showApplication(false);
