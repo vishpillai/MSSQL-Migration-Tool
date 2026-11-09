@@ -768,6 +768,12 @@ Describe 'Web host script safeguards' {
         $portableText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Start-PortableDbMigrationWeb.ps1') -Raw
         $portableText | Should -Match 'Global\\DbMigrationToolWebHost'
     }
+
+    It 'caches target compatibility bounds with discovery and guards plan-time lookups' {
+        $script:webHostText | Should -Match 'TargetMinCompatibilityLevel = \[int\]\$_.TargetMinCompatibilityLevel'
+        $script:webHostText | Should -Match 'TargetMaxCompatibilityLevel = \[int\]\$_.TargetMaxCompatibilityLevel'
+        $script:webHostText | Should -Match 'if \(\$null -eq \$knownDatabase\)'
+    }
 }
 
 Describe 'Web pair backup path requirement' {

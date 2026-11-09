@@ -881,6 +881,9 @@ function Start-WebMigrationPlan {
                 throw [ArgumentException]::new('Database selections must include a boolean Overwrite decision.')
             }
             $knownDatabase = @($discovery.Databases | Where-Object { $_.Database -ceq $database.Database }) | Select-Object -First 1
+            if ($null -eq $knownDatabase) {
+                throw [ArgumentException]::new("Database '$($database.Database)' was not found in the latest discovery for '$($pair.Source)'. Run discovery again.")
+            }
             $targetDatabaseName = ConvertTo-MigrationTargetDatabaseName -DatabaseName $(
                 if ($database.Contains('TargetDatabase')) { [string]$database.TargetDatabase }
                 else { [string]$database.Database }
@@ -2179,6 +2182,8 @@ ORDER BY s.name;
                             Database = [string]$_.Database
                             TargetExists = [bool]$_.TargetExists
                             Overwrite = $false
+                            TargetMinCompatibilityLevel = [int]$_.TargetMinCompatibilityLevel
+                            TargetMaxCompatibilityLevel = [int]$_.TargetMaxCompatibilityLevel
                         }
                     })
                 }

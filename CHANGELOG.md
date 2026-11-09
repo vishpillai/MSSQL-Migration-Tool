@@ -5,6 +5,7 @@ follow semantic versioning.
 
 ## Unreleased
 
+- Fixed migration start crashing with `The property 'TargetMinCompatibilityLevel' cannot be found` when a target compatibility level was chosen: pair discovery now caches the target's supported compatibility-level bounds for plan validation, and a missing cache entry produces a clear run-discovery-again message instead of a strict-mode error.
 - Contained server-object migration phases: a hard failure while copying logins, Agent jobs, or Agent operators is now reported as a phase failure (failing the run's server-object stage) while the remaining phases still run, so a crashing `Copy-DbaLogin` can no longer block Agent job and operator migration.
 - Added login-alignment business logic: logins whose entire database footprint maps to databases that do not exist on the target after the database phase (all of their user mappings, or their default database when unmapped) are skipped during login migration and reported as skipped. Server-role members, local NT service principals, and the runner identity are never skipped.
 - Fixed portable first-run administrator setup failing with a `SeSecurityPrivilege` error when the web host runs without elevation; the portable auth store now correctly skips ACL hardening during browser setup.
