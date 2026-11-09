@@ -5,6 +5,8 @@ follow semantic versioning.
 
 ## Unreleased
 
+- Contained server-object migration phases: a hard failure while copying logins, Agent jobs, or Agent operators is now reported as a phase failure (failing the run's server-object stage) while the remaining phases still run, so a crashing `Copy-DbaLogin` can no longer block Agent job and operator migration.
+- Added login-alignment business logic: logins whose entire database footprint maps to databases that do not exist on the target after the database phase (all of their user mappings, or their default database when unmapped) are skipped during login migration and reported as skipped. Server-role members, local NT service principals, and the runner identity are never skipped.
 - Fixed portable first-run administrator setup failing with a `SeSecurityPrivilege` error when the web host runs without elevation; the portable auth store now correctly skips ACL hardening during browser setup.
 - Made the migration readiness assessment report collapsible with always-visible status summary badges; the expanded state is remembered per pair, and fresh assessments auto-expand.
 - Starting a migration now collapses the setup panel and scrolls directly to the live migration monitor.

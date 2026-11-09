@@ -1,5 +1,79 @@
 Set-StrictMode -Version Latest
 
+function Get-MigrationDatabaseAlignedLogin {
+    <#
+    .SYNOPSIS
+        Finds logins whose database footprint is limited to databases that will not
+        exist on the migration target. A login qualifies when every database in which
+        it owns a user is excluded, or when it owns no users anywhere and its default
+        database is excluded. Logins holding fixed server-role membership and the
+        current connection identity are never reported.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string] $SqlInstance,
+
+        [Parameter(Mandatory)]
+        [string[]] $ExcludedDatabases
+    )
+
+    $excludedSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($databaseName in $ExcludedDatabases) {
+        if (-not [string]::IsNullOrWhiteSpace($databaseName)) { $null = $excludedSet.Add($databaseName) }
+    }
+    if ($excludedSet.Count -eq 0) { return }
+
+    $server = Connect-DbaInstance -SqlInstance $SqlInstance -ErrorAction Stop
+    $trueLogin = [string]$server.ConnectionContext.TrueLogin
+    $roleMembers = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($member in @(Get-DbaServerRoleMember -SqlInstance $SqlInstance -EnableException -ErrorAction Stop)) {
+        $null = $roleMembers.Add([string]$member.Name)
+    }
+    $databasesByLoginSid = @{}
+    foreach ($user in @(Get-DbaDbUser -SqlInstance $SqlInstance -ExcludeSystemUser -EnableException -ErrorAction Stop)) {
+        if (-not $user.Sid) { continue }
+        $sidKey = [Convert]::ToHexString([byte[]]$user.Sid)
+        if (-not $databasesByLoginSid.ContainsKey($sidKey)) {
+            $databasesByLoginSid[$sidKey] = [System.Collections.Generic.List[string]]::new()
+        }
+        $databasesByLoginSid[$sidKey].Add([string]$user.Database)
+    }
+
+    $logins = @(Get-DbaLogin -SqlInstance $SqlInstance -EnableException -ErrorAction Stop |
+        Where-Object { $_.LoginType -in @('SqlLogin', 'WindowsUser', 'WindowsGroup') })
+    foreach ($login in $logins) {
+        $loginName = [string]$login.Name
+        if ($loginName -like '##*' -or $loginName -like 'NT *' -or
+            [string]::Equals($loginName, $trueLogin, [StringComparison]::OrdinalIgnoreCase) -or
+            $roleMembers.Contains($loginName)) {
+            continue
+        }
+        $sidKey = if ($login.Sid) { [Convert]::ToHexString([byte[]]$login.Sid) } else { '' }
+        $mappedDatabases = @()
+        if ($sidKey -and $databasesByLoginSid.ContainsKey($sidKey)) {
+            $mappedDatabases = @($databasesByLoginSid[$sidKey] | Select-Object -Unique)
+        }
+        $defaultDatabase = [string]$login.DefaultDatabase
+        $alignedDatabases = $null
+        if ($mappedDatabases.Count -gt 0 -and
+            @($mappedDatabases | Where-Object { -not $excludedSet.Contains($_) }).Count -eq 0) {
+            $alignedDatabases = $mappedDatabases
+        }
+        elseif ($mappedDatabases.Count -eq 0 -and $defaultDatabase -and $excludedSet.Contains($defaultDatabase)) {
+            $alignedDatabases = @($defaultDatabase)
+        }
+        if ($alignedDatabases) {
+            [pscustomobject]@{
+                Name = $loginName
+                LoginType = [string]$login.LoginType
+                AlignedDatabases = @($alignedDatabases)
+            }
+        }
+    }
+}
+
 function Invoke-ServerObjectMigration {
     [CmdletBinding()]
     param(
@@ -13,17 +87,82 @@ function Invoke-ServerObjectMigration {
         [bool] $MigrateAgentJobs = $true,
 
         [Parameter()]
-        [bool] $MigrateAgentOperators = $true
+        [bool] $MigrateAgentOperators = $true,
+
+        [Parameter()]
+        [string[]] $ExcludedDatabases = @()
     )
 
+    # Each phase is isolated: a hard failure is emitted as a phase result object and
+    # the remaining phases still run, so one bad login or job cannot block the rest.
     if ($MigrateLogins) {
-        Copy-DbaLogin -Source $Pair.Source -Destination $Pair.Target -ExcludeLogin 'sa' -Force -EnableException
+        try {
+            $excludedLogins = [System.Collections.Generic.List[string]]::new()
+            $excludedLogins.Add('sa')
+            if (@($ExcludedDatabases).Count -gt 0) {
+                $alignedLogins = @(Get-MigrationDatabaseAlignedLogin -SqlInstance ([string]$Pair.Source) `
+                    -ExcludedDatabases $ExcludedDatabases -ErrorAction Stop)
+                foreach ($alignedLogin in $alignedLogins) {
+                    $excludedLogins.Add([string]$alignedLogin.Name)
+                    [pscustomobject]@{
+                        SourceServer = [string]$Pair.Source
+                        DestinationServer = [string]$Pair.Target
+                        Name = [string]$alignedLogin.Name
+                        Type = "Login - $($alignedLogin.LoginType)"
+                        Status = 'Skipped'
+                        Notes = "Aligned to database(s) not migrated to the target ($($alignedLogin.AlignedDatabases -join ', ')); not copied."
+                        DateTime = Get-Date
+                    }
+                }
+            }
+            Copy-DbaLogin -Source $Pair.Source -Destination $Pair.Target -ExcludeLogin $excludedLogins.ToArray() -Force -EnableException
+        }
+        catch {
+            [pscustomobject]@{
+                SourceServer = [string]$Pair.Source
+                DestinationServer = [string]$Pair.Target
+                Name = '*'
+                Type = 'Login phase'
+                Status = 'Failed'
+                Notes = "Login migration phase failed: $($_.Exception.Message)"
+                IsPhaseFailure = $true
+                DateTime = Get-Date
+            }
+        }
     }
     if ($MigrateAgentJobs) {
-        Copy-DbaAgentJob -Source $Pair.Source -Destination $Pair.Target -DisableOnDestination -Force -EnableException
+        try {
+            Copy-DbaAgentJob -Source $Pair.Source -Destination $Pair.Target -DisableOnDestination -Force -EnableException
+        }
+        catch {
+            [pscustomobject]@{
+                SourceServer = [string]$Pair.Source
+                DestinationServer = [string]$Pair.Target
+                Name = '*'
+                Type = 'Agent job phase'
+                Status = 'Failed'
+                Notes = "Agent job migration phase failed: $($_.Exception.Message)"
+                IsPhaseFailure = $true
+                DateTime = Get-Date
+            }
+        }
     }
     if ($MigrateAgentOperators) {
-        Copy-DbaAgentOperator -Source $Pair.Source -Destination $Pair.Target -Force -EnableException
+        try {
+            Copy-DbaAgentOperator -Source $Pair.Source -Destination $Pair.Target -Force -EnableException
+        }
+        catch {
+            [pscustomobject]@{
+                SourceServer = [string]$Pair.Source
+                DestinationServer = [string]$Pair.Target
+                Name = '*'
+                Type = 'Agent operator phase'
+                Status = 'Failed'
+                Notes = "Agent operator migration phase failed: $($_.Exception.Message)"
+                IsPhaseFailure = $true
+                DateTime = Get-Date
+            }
+        }
     }
 }
 

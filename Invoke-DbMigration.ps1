@@ -267,6 +267,28 @@ foreach ($pair in $configuration.SourceTargets) {
         }
     }
 
+    # Logins aligned to databases that will not exist on the target are skipped during
+    # server-object migration. If the target check fails, no login is excluded (safer default).
+    $unmigratedSourceDatabases = [System.Collections.Generic.List[string]]::new()
+    if ([bool]$configuration.MigrateLogins -and $databases.Count -gt 0) {
+        foreach ($database in $databases) {
+            try {
+                $loginTargetSettings = Get-MigrationDatabaseTargetSettings -SourceDatabase $database.Name `
+                    -Mappings @($configuration.DatabaseTargetMappings)
+                if (-not (Test-MigrationDatabaseExists -SqlInstance $pair.Target -Database ([string]$loginTargetSettings.TargetDatabase))) {
+                    $unmigratedSourceDatabases.Add([string]$database.Name)
+                }
+            }
+            catch {
+                if ($ProgressPath) {
+                    Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
+                        -Database '*' -Stage 'ServerObjects' -Status 'InProgress' `
+                        -Message "Login alignment check skipped for '$($database.Name)': $($_.Exception.Message)"
+                }
+            }
+        }
+    }
+
     $serverSteps = @()
     if ($configuration.MigrateLogins -or $configuration.MigrateAgentJobs -or $configuration.MigrateAgentOperators) {
         $serverSteps += @{
@@ -275,7 +297,8 @@ foreach ($pair in $configuration.SourceTargets) {
                 Invoke-ServerObjectMigration -Pair $pair `
                     -MigrateLogins ([bool]$configuration.MigrateLogins) `
                     -MigrateAgentJobs ([bool]$configuration.MigrateAgentJobs) `
-                    -MigrateAgentOperators ([bool]$configuration.MigrateAgentOperators)
+                    -MigrateAgentOperators ([bool]$configuration.MigrateAgentOperators) `
+                    -ExcludedDatabases $unmigratedSourceDatabases
             }
         }
     }
@@ -305,8 +328,10 @@ foreach ($pair in $configuration.SourceTargets) {
                 Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
                     -Database '*' -Stage $serverStep.Name -Status 'Started' -Message 'Server-object stage started.'
             }
+            $stepHadPhaseFailure = $false
             & $serverStep.Action | ForEach-Object {
                 $serverObject = $_
+                if ($serverObject.PSObject.Properties.Name -contains 'IsPhaseFailure') { $stepHadPhaseFailure = $true }
                 if ($ProgressPath -and $serverObject.PSObject.Properties.Name -contains 'Status') {
                     $objectStatus = [string]$serverObject.Status
                     $eventStatus = if ($objectStatus -match '^(Successful|Completed)$') {
@@ -333,13 +358,27 @@ foreach ($pair in $configuration.SourceTargets) {
                 }
                 $serverObject
             }
-            $migrationResults.Add([pscustomobject]@{
-                Source = $pair.Source; Target = $pair.Target; Database = '*'; Stage = $serverStep.Name
-                Status = 'Completed'; BackupPath = $null; Message = 'Operation completed.'
-            })
-            if ($ProgressPath) {
-                Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
-                    -Database '*' -Stage $serverStep.Name -Status 'Completed' -Message 'Server-object stage completed.'
+            if ($stepHadPhaseFailure) {
+                $migrationResults.Add([pscustomobject]@{
+                    Source = $pair.Source; Target = $pair.Target; Database = '*'; Stage = $serverStep.Name
+                    Status = 'Failed'; BackupPath = $null
+                    Message = 'One or more server-object phases failed; the remaining phases still ran. Review the progress log and report for phase details.'
+                })
+                if ($ProgressPath) {
+                    Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
+                        -Database '*' -Stage $serverStep.Name -Status 'Failed' `
+                        -Message 'One or more server-object phases failed; the remaining phases still ran.'
+                }
+            }
+            else {
+                $migrationResults.Add([pscustomobject]@{
+                    Source = $pair.Source; Target = $pair.Target; Database = '*'; Stage = $serverStep.Name
+                    Status = 'Completed'; BackupPath = $null; Message = 'Operation completed.'
+                })
+                if ($ProgressPath) {
+                    Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
+                        -Database '*' -Stage $serverStep.Name -Status 'Completed' -Message 'Server-object stage completed.'
+                }
             }
             if ($serverStep.Name -eq 'OlaHallengrenMaintenance') {
                 $null = $installedMaintenanceTargets.Add([string]$pair.Target)

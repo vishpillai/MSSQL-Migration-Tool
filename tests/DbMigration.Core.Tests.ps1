@@ -4,6 +4,90 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.WebAuth.psm1') -Force
 }
 
+Describe 'Server object migration' {
+    BeforeAll {
+        Import-Module dbatools -ErrorAction Stop
+        Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.PostMigration.psm1') -Force
+    }
+
+    It 'isolates a failing login phase so agent jobs and operators still migrate' {
+        InModuleScope DbMigration.PostMigration {
+            Mock Copy-DbaLogin { throw "The property 'Properties' cannot be found on this object." }
+            Mock Copy-DbaAgentJob { [pscustomobject]@{ SourceServer = 's'; DestinationServer = 't'; Name = 'job1'; Type = 'Agent Job'; Status = 'Successful'; Notes = '' } }
+            Mock Copy-DbaAgentOperator { [pscustomobject]@{ SourceServer = 's'; DestinationServer = 't'; Name = 'op1'; Type = 'Agent Operator'; Status = 'Successful'; Notes = '' } }
+
+            $results = @(Invoke-ServerObjectMigration -Pair @{ Source = 's'; Target = 't' })
+
+            Should -Invoke Copy-DbaAgentJob -Exactly 1 -Scope It
+            Should -Invoke Copy-DbaAgentOperator -Exactly 1 -Scope It
+            $phaseFailures = @($results | Where-Object { $_.PSObject.Properties.Name -contains 'IsPhaseFailure' })
+            $phaseFailures.Count | Should -Be 1
+            $phaseFailures[0].Type | Should -Be 'Login phase'
+            $phaseFailures[0].Status | Should -Be 'Failed'
+            $phaseFailures[0].Notes | Should -BeLike "*Properties*"
+            @($results | Where-Object Name -eq 'job1').Count | Should -Be 1
+            @($results | Where-Object Name -eq 'op1').Count | Should -Be 1
+        }
+    }
+
+    It 'excludes logins aligned to databases that are missing on the target' {
+        InModuleScope DbMigration.PostMigration {
+            $fakeServer = [pscustomobject]@{ ConnectionContext = [pscustomobject]@{ TrueLogin = 'DOMAIN\runner' } }
+            Mock Connect-DbaInstance { $fakeServer }
+            Mock Get-DbaServerRoleMember { @([pscustomobject]@{ Name = 'DOMAIN\dba.admin' }) }
+            Mock Get-DbaDbUser {
+                @(
+                    [pscustomobject]@{ Database = 'AAD'; Name = 'appuser'; Login = 'app_user'; Sid = [byte[]](1, 2, 3, 4) },
+                    [pscustomobject]@{ Database = 'AAD'; Name = 'shareduser'; Login = 'shared_user'; Sid = [byte[]](2, 3, 4, 5) },
+                    [pscustomobject]@{ Database = 'OTHER'; Name = 'shareduser'; Login = 'shared_user'; Sid = [byte[]](2, 3, 4, 5) }
+                )
+            }
+            Mock Get-DbaLogin {
+                @(
+                    [pscustomobject]@{ Name = 'app_user'; LoginType = 'SqlLogin'; Sid = [byte[]](1, 2, 3, 4); DefaultDatabase = 'AAD' },
+                    [pscustomobject]@{ Name = 'shared_user'; LoginType = 'SqlLogin'; Sid = [byte[]](2, 3, 4, 5); DefaultDatabase = 'AAD' },
+                    [pscustomobject]@{ Name = 'no_mapping_aad'; LoginType = 'SqlLogin'; Sid = [byte[]](3, 4, 5, 6); DefaultDatabase = 'AAD' },
+                    [pscustomobject]@{ Name = 'no_mapping_master'; LoginType = 'SqlLogin'; Sid = [byte[]](4, 5, 6, 7); DefaultDatabase = 'master' },
+                    [pscustomobject]@{ Name = 'DOMAIN\dba.admin'; LoginType = 'WindowsUser'; Sid = [byte[]](5, 6, 7, 8); DefaultDatabase = 'AAD' },
+                    [pscustomobject]@{ Name = 'DOMAIN\runner'; LoginType = 'WindowsUser'; Sid = [byte[]](6, 7, 8, 9); DefaultDatabase = 'AAD' }
+                )
+            }
+            $script:capturedExclude = $null
+            Mock Copy-DbaLogin { $script:capturedExclude = @($ExcludeLogin) }
+            Mock Copy-DbaAgentJob { }
+            Mock Copy-DbaAgentOperator { }
+
+            $results = @(Invoke-ServerObjectMigration -Pair @{ Source = 's'; Target = 't' } -ExcludedDatabases @('AAD'))
+
+            $script:capturedExclude | Should -Contain 'sa'
+            $script:capturedExclude | Should -Contain 'app_user'
+            $script:capturedExclude | Should -Contain 'no_mapping_aad'
+            $script:capturedExclude | Should -Not -Contain 'shared_user'
+            $script:capturedExclude | Should -Not -Contain 'no_mapping_master'
+            $script:capturedExclude | Should -Not -Contain 'DOMAIN\dba.admin'
+            $script:capturedExclude | Should -Not -Contain 'DOMAIN\runner'
+            $skipped = @($results | Where-Object { $_.Status -eq 'Skipped' })
+            $skipped.Count | Should -Be 2
+            $skipped[0].Notes | Should -BeLike '*not migrated to the target*'
+        }
+    }
+
+    It 'copies every login except sa when no databases are excluded' {
+        InModuleScope DbMigration.PostMigration {
+            Mock Get-MigrationDatabaseAlignedLogin { throw 'alignment must not run without excluded databases' }
+            $script:capturedExclude = $null
+            Mock Copy-DbaLogin { $script:capturedExclude = @($ExcludeLogin) }
+            Mock Copy-DbaAgentJob { }
+            Mock Copy-DbaAgentOperator { }
+
+            $null = Invoke-ServerObjectMigration -Pair @{ Source = 's'; Target = 't' }
+
+            $script:capturedExclude.Count | Should -Be 1
+            $script:capturedExclude[0] | Should -Be 'sa'
+        }
+    }
+}
+
 Describe 'Migration web authentication' {
     It 'verifies the configured username and password using a salted PBKDF2 record' {
         $password = ConvertTo-SecureString 'test-password-1234' -AsPlainText -Force
