@@ -815,6 +815,12 @@ Describe 'Web host script safeguards' {
         $script:webHostText | Should -Match '/XD config portable reports'
         $script:webHostText | Should -Match '/XF appinfo\.json MigrationState\.json'
     }
+
+    It 'supports opt-in automatic updates with a persisted setting and build identity' {
+        $script:webHostText | Should -Match "'/api/admin/auto-update'"
+        $script:webHostText | Should -Match 'auto-update\.json'
+        $script:webHostText | Should -Match 'buildId = \$script:BuildStamp'
+    }
 }
 
 Describe 'Web pair backup path requirement' {

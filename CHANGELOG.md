@@ -5,6 +5,8 @@ follow semantic versioning.
 
 ## Unreleased
 
+- Added build-change auto-refresh: the web app tracks the host build stamp and reloads itself after an update or host restart, so open tabs never show stale state from a previous build.
+- Added opt-in automatic updates: Super Admins can enable daily checks that apply the latest build and restart the host only when the app is idle (no run active, no event streams attached, no recent requests); data preservation matches manual updates.
 - Terminal migration events pushed over the event stream now refresh the monitor status immediately, so background browser tabs (whose one-second status poll is throttled) still flip to Completed/Failed/Stopped the moment a run ends.
 - Fixed the server-object stage failing the whole run with `The property 'Properties' cannot be found on this object`: dbatools permission-sync internals can leak non-result objects into the phase output pipeline, and serializing them for the console escaped the phase guard. Each phase now drops pipeline debris before streaming, and the runner forwards only well-formed result objects.
 - Login alignment now also applies to browser-driven runs: the plan computes which planned databases are absent on the target and hands them to the server-object worker, whose database list is intentionally empty by design. Direct `Invoke-DbMigration.ps1` runs keep computing the set from the configured database list.

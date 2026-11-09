@@ -147,6 +147,17 @@ $script:UpdateInfoCheckedUtc = [DateTime]::MinValue
 $script:UpdateRepoApiBase = 'https://api.github.com/repos/vishpillai/MSSQL-Migration-Tool'
 $script:UpdateZipUrl = 'https://codeload.github.com/vishpillai/MSSQL-Migration-Tool/zip/refs/heads/main'
 $script:SelfUpdatePending = $false
+$script:AutoUpdateSettingsPath = Join-Path $storage.AuthDirectory 'auto-update.json'
+$script:AutoUpdateEnabled = $false
+if (Test-Path -LiteralPath $script:AutoUpdateSettingsPath -PathType Leaf) {
+    try {
+        $script:AutoUpdateEnabled = [bool]((Get-Content -LiteralPath $script:AutoUpdateSettingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).Enabled)
+    }
+    catch {
+        Write-Warning "Could not read auto-update setting: $($_.Exception.Message)"
+    }
+}
+$script:LastRequestUtc = [DateTime]::UtcNow
 $script:MigrationProcess = $null
 $script:PatchProcess = $null
 $script:PatchRunId = $null
@@ -452,6 +463,7 @@ function Get-WebUpdateInfo {
         latestCommitSubject = $null
         commitsBehind = $null
         updateAvailable = $false
+        autoUpdate = [bool]$script:AutoUpdateEnabled
         error = $null
     }
     try {
@@ -532,6 +544,45 @@ function Update-WebEventStreams {
     foreach ($client in $deadClients) {
         try { $client.Response.Close() } catch { }
         $null = $script:SseClients.Remove($client)
+    }
+}
+
+function Update-WebAutoUpdate {
+    <#
+    .SYNOPSIS
+        Opt-in automatic updates: once per day, when the app is idle (no run active, no
+        event streams attached, no recent requests), downloads and applies the latest
+        build, then restarts the host. Never acts while work is in progress.
+    #>
+    [CmdletBinding()]
+    param()
+
+    if (-not $script:AutoUpdateEnabled -or $script:SelfUpdatePending) { return }
+    if ($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) { return }
+    if ($script:PatchProcess -and -not $script:PatchProcess.HasExited) { return }
+    if ($script:SseClients.Count -gt 0) { return }
+    if ([DateTime]::UtcNow - $script:LastRequestUtc -lt [TimeSpan]::FromMinutes(5)) { return }
+
+    $info = $script:UpdateInfo
+    if ($script:UpdateInfoCheckedUtc -lt [DateTime]::UtcNow.AddHours(-24)) {
+        $info = Get-WebUpdateInfo -Refresh
+    }
+    if ($info -and $info.updateAvailable -and -not $info.error) {
+        Write-WebHostLog -Level Information -Message "Auto-update: applying build $($info.latestCommit); the host restarts when complete."
+        Write-WebAuditRecord -Action 'Application auto-update started' -Actor 'auto-update' -Outcome 'Requested' -Details @{
+            LatestCommit = [string]$info.latestCommit
+        }
+        try {
+            Start-WebSelfUpdate
+            $script:SelfUpdatePending = $true
+            $script:Listener.Stop()
+        }
+        catch {
+            Write-WebHostLog -Level Error -Message "Auto-update failed to stage: $($_.Exception.Message)"
+            Write-WebAuditRecord -Action 'Application auto-update started' -Actor 'auto-update' -Outcome 'Failed' -Details @{
+                ErrorType = $_.Exception.GetType().Name
+            }
+        }
     }
 }
 
@@ -1482,6 +1533,8 @@ if ($script:SetupToken) {
 Write-Output "Web host log: $($script:HostLogPath)"
 Write-Output 'Use Ctrl+C to stop the web host. Do not stop the host while a migration is running.'
 Write-WebHostLog -Level Information -Message "Web host started at $($script:Origin)."
+$buildInfo = Get-WebAppBuildInfo
+$script:BuildStamp = "{0}:{1}:{2}" -f [string]$buildInfo.Version, [string]$buildInfo.CommitSha, [DateTime]::UtcNow.Ticks
 $null = Get-WebUpdateInfo
 try {
     while ($script:Listener.IsListening) {
@@ -1490,7 +1543,7 @@ try {
         # 250 ms, so an operator's Ctrl+C is honored promptly even when idle.
         $contextTask = $script:Listener.GetContextAsync()
         try {
-            while (-not $contextTask.Wait(250)) { Update-WebEventStreams }
+            while (-not $contextTask.Wait(250)) { Update-WebEventStreams; Update-WebAutoUpdate }
         }
         catch [System.Management.Automation.PipelineStoppedException] {
             throw
@@ -1502,6 +1555,7 @@ try {
         if (-not $contextTask.IsCompletedSuccessfully) { break }
         $context = $contextTask.Result
         $request = $context.Request
+        $script:LastRequestUtc = [DateTime]::UtcNow
         $response = $context.Response
         $script:CurrentAuditRequestId = [guid]::NewGuid().ToString('N')
         $script:CurrentAuditClientAddress = [string]$request.RemoteEndPoint.Address
@@ -1576,6 +1630,8 @@ try {
                     role = if ($session) { $session.Role } else { '' }
                     features = if ($session) { @($session.Features) } else { @() }
                     superAdmin = [bool]($session -and $session.Role -eq 'SuperAdmin')
+                    buildId = $script:BuildStamp
+                    autoUpdate = [bool]$script:AutoUpdateEnabled
                     branding = if ($script:AuthRecord -and $script:AuthRecord.Contains('Branding')) {
                         $script:AuthRecord.Branding
                     } else { Get-MigrationWebDefaultBranding }
@@ -2991,6 +3047,7 @@ ORDER BY volumes.volume_mount_point;
                 }
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
                     runId = $script:RunId
+                    buildId = $script:BuildStamp
                     running = $running
                     exitCode = $exitCode
                     databaseCount = $script:DatabaseJobCount
@@ -3073,6 +3130,20 @@ ORDER BY volumes.volume_mount_point;
                 $refreshUpdateInfo = $request.QueryString['refresh'] -eq 'true' -and $session.Role -eq 'SuperAdmin'
                 $updateInfo = Get-WebUpdateInfo -Refresh:$refreshUpdateInfo
                 Send-WebJson -Response $response -StatusCode 200 -Value $updateInfo
+                continue
+            }
+            if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/admin/auto-update') {
+                $body = Read-WebRequestJson -Request $request
+                if (-not $body.Contains('Enabled') -or $body.Enabled -isnot [bool]) {
+                    throw [ArgumentException]::new('Enabled must be provided as a JSON boolean.')
+                }
+                $script:AutoUpdateEnabled = [bool]$body.Enabled
+                @{ Enabled = $script:AutoUpdateEnabled } | ConvertTo-Json |
+                    Set-Content -LiteralPath $script:AutoUpdateSettingsPath -Encoding UTF8 -ErrorAction Stop
+                Write-WebAuditRecord -Action 'Auto-update setting changed' -Actor $session.Username -Outcome 'Succeeded' -Details @{
+                    Enabled = $script:AutoUpdateEnabled
+                }
+                Send-WebJson -Response $response -StatusCode 200 -Value @{ enabled = $script:AutoUpdateEnabled }
                 continue
             }
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/admin/update') {
