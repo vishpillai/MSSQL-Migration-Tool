@@ -494,6 +494,7 @@ function Read-WebProcessOutput {
 
     $queuedOutput = $null
     while ($script:ProcessOutputQueue.TryDequeue([ref]$queuedOutput)) {
+        $cleanMessage = [regex]::Replace([string]$queuedOutput.Message, "`u{1b}\[[0-9;]*[A-Za-z]", '')
         $outputEvent = @{
             Id = $script:NextEventId
             Timestamp = [DateTime]::UtcNow.ToString('o')
@@ -502,14 +503,14 @@ function Read-WebProcessOutput {
             Database = ''
             Stage = 'ProcessOutput'
             Status = $queuedOutput.Status
-            Message = $queuedOutput.Message
+            Message = $cleanMessage
         }
         $script:NextEventId++
         $script:EventBuffer.Add($outputEvent)
         if ($script:CurrentProcessOperation -eq 'Patch' -and $script:PatchRunId) {
             Write-WebRunRecord -Operation Patch -RunId $script:PatchRunId -RecordType ProcessOutput -Record @{
                 Status = $queuedOutput.Status
-                Message = $queuedOutput.Message
+                Message = $cleanMessage
                 Action = $script:PatchAction
                 KB = $script:PatchKB
             }
@@ -517,7 +518,7 @@ function Read-WebProcessOutput {
         elseif ($script:CurrentProcessOperation -eq 'Migration' -and $script:RunId) {
             Write-WebRunRecord -Operation Migration -RunId $script:RunId -RecordType ProcessOutput -Record @{
                 Status = $queuedOutput.Status
-                Message = $queuedOutput.Message
+                Message = $cleanMessage
             }
         }
         $queuedOutput = $null
@@ -1439,7 +1440,7 @@ try {
                     if ($securePassword) { $securePassword.Dispose() }
                 }
                 Save-MigrationWebAuthRecord -Record $newAuthStore -Path $fullAuthPath `
-                    -CreateOnly
+                    -PortableMode:$script:PortableMode -CreateOnly
                 $script:AuthRecord = $newAuthStore
                 $script:SetupToken = $null
                 $script:SetupAttempts.Remove($address)

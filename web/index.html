@@ -79,9 +79,21 @@
     .custom-sql-result-header h3 { min-width: 0; margin: 0; font-size: 14px; overflow-wrap: anywhere; }
     .custom-sql-result-select { display: flex; min-width: 0; align-items: center; gap: 8px; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
     .custom-sql-result-actions { display: flex; flex: 0 0 auto; gap: 8px; align-items: center; }
-    .readiness-report { margin-top: 12px; padding: 14px; border: 1px solid #d8e0e8; border-radius: 8px; background: #fff; }
-    .readiness-report-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-    .readiness-report-header h4 { margin: 0; font-size: 15px; }
+    .readiness-report { margin-top: 12px; border: 1px solid var(--line, #d8e0e8); border-radius: 8px; background: var(--surface, #fff); }
+    .readiness-report > summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; cursor: pointer; background: var(--panel-title, #f4f7fa); border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary, #243d55); list-style: none; }
+    .readiness-report > summary::-webkit-details-marker { display: none; }
+    .readiness-report > summary::after { content: "\25B8"; margin-left: auto; color: var(--text-secondary, #5b7085); transition: transform 0.15s ease; }
+    .readiness-report[open] > summary { border-bottom: 1px solid var(--line, #d8e0e8); border-radius: 8px 8px 0 0; }
+    .readiness-report[open] > summary::after { transform: rotate(90deg); }
+    .readiness-report > summary:focus-visible { outline: 2px solid var(--accent, #1769aa); outline-offset: -2px; }
+    .readiness-report-title { font-size: 15px; }
+    .readiness-report-meta { font-weight: 400; font-size: 12px; color: var(--text-secondary, #5b7085); }
+    .readiness-badge { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .readiness-badge-blocked { background: #fdecec; color: #a52121; }
+    .readiness-badge-review { background: #fff4e0; color: #805300; }
+    .readiness-badge-ok { background: #e8f6ec; color: #1c6b35; }
+    .readiness-badge-muted { background: #eef2f6; color: #42576d; }
+    .readiness-report-body { padding: 14px; }
     .readiness-report-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .readiness-findings td { min-width: 120px; max-width: 420px; white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
     .readiness-findings td:nth-child(6), .readiness-findings td:nth-child(7) { min-width: 220px; }
@@ -3424,20 +3436,46 @@
     }
 
     function renderReadinessReport(report, pairIndex) {
-      const section = document.createElement("section");
+      const storageKey = `dbMigrationReadinessExpanded.v1.${pairIndex}`;
+      const section = document.createElement("details");
       section.className = "readiness-report";
-      const header = document.createElement("div");
-      header.className = "readiness-report-header";
-      const titleGroup = document.createElement("div");
-      const title = document.createElement("h4");
-      title.textContent = "Migration readiness assessment";
-      const summary = document.createElement("p");
-      summary.className = "muted";
+      section.id = `readiness-report-${pairIndex}`;
+      try {
+        section.open = localStorage.getItem(storageKey) !== "false";
+      } catch (_) {
+        section.open = true;
+      }
+      section.addEventListener("toggle", () => {
+        try { localStorage.setItem(storageKey, String(section.open)); } catch (_) {}
+      });
+
       const blocked = Number(report.blockedCount) || 0;
       const review = Number(report.reviewRequiredCount) || 0;
       const noBlockers = Number(report.noBlockersCount) || 0;
-      summary.textContent = `${report.databaseCount} database(s) · ${blocked} blocked · ${review} require review · ${noBlockers} with no blockers detected · ${new Date(report.assessedAt).toLocaleString()}`;
-      titleGroup.append(title, summary);
+
+      const summary = document.createElement("summary");
+      const title = document.createElement("span");
+      title.className = "readiness-report-title";
+      title.textContent = "Migration readiness assessment";
+      summary.append(title);
+      const addBadge = (count, className, label) => {
+        const badge = document.createElement("span");
+        badge.className = `readiness-badge ${className}`;
+        badge.textContent = `${count} ${label}`;
+        summary.append(badge);
+      };
+      addBadge(Number(report.databaseCount) || 0, "readiness-badge-muted", "database(s)");
+      addBadge(blocked, "readiness-badge-blocked", "blocked");
+      addBadge(review, "readiness-badge-review", "require review");
+      addBadge(noBlockers, "readiness-badge-ok", "no blockers");
+      const assessedAt = document.createElement("span");
+      assessedAt.className = "readiness-report-meta";
+      assessedAt.textContent = new Date(report.assessedAt).toLocaleString();
+      summary.append(assessedAt);
+
+      const body = document.createElement("div");
+      body.className = "readiness-report-body";
+
       const actions = document.createElement("div");
       actions.className = "readiness-report-actions";
       for (const [format, label] of [["html", "Download HTML report"], ["csv", "Download CSV"], ["json", "Download JSON"]]) {
@@ -3450,13 +3488,12 @@
         button.textContent = label;
         actions.append(button);
       }
-      header.append(titleGroup, actions);
-      section.append(header);
+      body.append(actions);
 
       const disclaimer = document.createElement("p");
       disclaimer.className = "muted";
       disclaimer.textContent = "DMA-inspired local checks only. This is not Microsoft DMA and is not exhaustive; candidate code matches may be false positives. No migration or source/target changes were performed.";
-      section.append(disclaimer);
+      body.append(disclaimer);
 
       const tableWrap = document.createElement("div");
       tableWrap.className = "table-wrap";
@@ -3486,7 +3523,9 @@
       }
       table.append(thead, tbody);
       tableWrap.append(table);
-      section.append(tableWrap);
+      body.append(tableWrap);
+
+      section.append(summary, body);
       return section;
     }
 
@@ -3548,6 +3587,7 @@
           Pair: { Source: pair.Source, Target: pair.Target, MigrationMode: pair.MigrationMode },
           Databases: selectedDatabases
         });
+        try { localStorage.setItem(`dbMigrationReadinessExpanded.v1.${index}`, "true"); } catch (_) {}
         const report = pair.readinessReport;
         pair.summary = `Readiness: ${report.blockedCount} blocked · ${report.reviewRequiredCount} require review · ${report.noBlockersCount} no blockers detected.`;
       } catch (error) {
@@ -4692,6 +4732,8 @@
         $("step-progress-label").textContent = "Waiting for first step.";
         updateOutcomes(selectedCount);
         setRunControlsLocked(true);
+        $("migration-setup-details").open = false;
+        $("migration-monitor").scrollIntoView({ behavior: "smooth", block: "start" });
       } catch (error) {
         $("migration-error").textContent = error.message;
         setRunControlsLocked(false);

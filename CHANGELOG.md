@@ -5,6 +5,10 @@ follow semantic versioning.
 
 ## Unreleased
 
+- Fixed portable first-run administrator setup failing with a `SeSecurityPrivilege` error when the web host runs without elevation; the portable auth store now correctly skips ACL hardening during browser setup.
+- Made the migration readiness assessment report collapsible with always-visible status summary badges; the expanded state is remembered per pair, and fresh assessments auto-expand.
+- Starting a migration now collapses the setup panel and scrolls directly to the live migration monitor.
+- Stripped ANSI color escape sequences from migration/patch child-process output so the live monitor and run logs show clean, readable text.
 - Added an opt-in post-migration action to install Ola Hallengren's Maintenance Solution procedures into `master` once per target instance; SQL Agent jobs are not created and existing objects are not replaced.
 - Added a collation readiness check that compares each source database's collation with the target tempdb collation and flags modules that create temp tables or table variables with character columns and no `COLLATE` clause, preventing post-migration "Cannot resolve the collation conflict" (Msg 468) errors.
 
