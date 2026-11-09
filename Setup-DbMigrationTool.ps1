@@ -12,7 +12,8 @@ function Get-PowerShell7Path {
 
     foreach ($candidate in @(
         (Join-Path ${env:ProgramFiles} 'PowerShell\7\pwsh.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe')
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Pwsh7\pwsh.exe')
     )) {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
     }
@@ -37,7 +38,7 @@ if ($powerShellPath -and (Get-PowerShellVersion -Executable $powerShellPath) -lt
 if ($needsInstall) {
     $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if (-not $winget) {
-        throw 'PowerShell 7.2+ is missing and winget is unavailable. Install PowerShell 7.2+ manually, then run this setup again.'
+        throw 'PowerShell 7.2+ is missing and winget is unavailable. Run Install-DbMigrationPrerequisites-OneClick.cmd (installs PowerShell 7 for the current user without winget) or install PowerShell 7.2+ manually, then run this setup again.'
     }
 
     Write-Host 'Installing/updating PowerShell 7 for the current user through winget.'
