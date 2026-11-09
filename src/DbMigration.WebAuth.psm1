@@ -454,6 +454,33 @@ function Test-MigrationWebWindowsGroupMembership {
     }
 }
 
+function Invoke-MigrationWebImpersonated {
+    <#
+    .SYNOPSIS
+        Runs a script block under the signed-in Windows identity when the web host
+        uses Windows authentication; runs it unchanged when no identity is supplied.
+        Impersonation covers in-process local resource access. Remote servers also
+        require Kerberos constrained delegation for the web-host account/computer.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()][System.Security.Principal.WindowsIdentity] $Identity,
+        [Parameter(Mandatory)][scriptblock] $ScriptBlock
+    )
+
+    if (-not $Identity) {
+        return & $ScriptBlock
+    }
+
+    # .NET (Core) removed the instance Impersonate(); RunImpersonated scopes the token correctly.
+    # Emit nothing when the block produced no output so callers using @() see an empty result.
+    $result = [System.Security.Principal.WindowsIdentity]::RunImpersonated($Identity.AccessToken, [System.Func[object]] {
+        & $ScriptBlock
+    })
+    if ($null -eq $result) { return }
+    $result
+}
+
 function Resolve-MigrationWebStoragePaths {
     [CmdletBinding()]
     param(
@@ -493,4 +520,4 @@ function Resolve-MigrationWebStoragePaths {
     }
 }
 
-Export-ModuleMember -Function New-MigrationWebPasswordRecord, Test-MigrationWebPassword, Save-MigrationWebAuthRecord, Import-MigrationWebAuthStore, Test-MigrationWebWindowsGroupMembership, Resolve-MigrationWebStoragePaths, Get-MigrationWebDefaultBranding, ConvertTo-MigrationWebAuthStore, New-MigrationWebUserRecord, Get-MigrationWebSafeUser, Get-MigrationWebFeatureNames, Set-MigrationWebBranding
+Export-ModuleMember -Function New-MigrationWebPasswordRecord, Test-MigrationWebPassword, Save-MigrationWebAuthRecord, Import-MigrationWebAuthStore, Test-MigrationWebWindowsGroupMembership, Resolve-MigrationWebStoragePaths, Get-MigrationWebDefaultBranding, ConvertTo-MigrationWebAuthStore, New-MigrationWebUserRecord, Get-MigrationWebSafeUser, Get-MigrationWebFeatureNames, Set-MigrationWebBranding, Invoke-MigrationWebImpersonated

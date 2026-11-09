@@ -32,6 +32,22 @@ Describe 'Migration web authentication' {
         Test-MigrationWebWindowsGroupMembership -Identity $identity -Group 'S-1-0-0' | Should -BeFalse
     }
 
+    It 'runs a block under the supplied Windows identity and restores the caller' {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $before = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+        $inside = Invoke-MigrationWebImpersonated -Identity $identity -ScriptBlock {
+            [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        }
+
+        $inside | Should -Be $identity.Name
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().Name | Should -Be $before
+    }
+
+    It 'runs the block unchanged when no identity is supplied' {
+        Invoke-MigrationWebImpersonated -Identity $null -ScriptBlock { 42 } | Should -Be 42
+    }
+
     It 'migrates a legacy credential record into one installation Super Admin' {
         $password = ConvertTo-SecureString 'test-password-1234' -AsPlainText -Force
         try {

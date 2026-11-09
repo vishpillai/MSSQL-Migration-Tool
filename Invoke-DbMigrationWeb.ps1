@@ -17,9 +17,8 @@ if ($PSVersionTable.PSVersion -lt [Version]'7.2') {
     throw 'PowerShell 7.2 or later is required.'
 }
 if ($AuthenticationMode -eq 'Windows') {
-    if ($PortableMode) {
-        throw 'Windows Integrated Authentication requires HTTPS server mode; it is not supported in portable HTTP mode.'
-    }
+    # Portable HTTP mode is permitted because it answers loopback clients only (enforced
+    # per request before the authentication gate), so Negotiate tokens never cross the network.
     if ([string]::IsNullOrWhiteSpace($WindowsAuthGroup)) {
         throw "Windows authentication requires -WindowsAuthGroup 'DOMAIN\GroupName'."
     }
@@ -400,9 +399,12 @@ function Save-WebApplicationAuthStore {
 }
 
 function Get-WebSession {
-    param([Parameter(Mandatory)][System.Net.HttpListenerRequest] $Request)
+    param(
+        [Parameter(Mandatory)][System.Net.HttpListenerRequest] $Request,
+        [Parameter()][System.Security.Principal.WindowsIdentity] $WindowsIdentity
+    )
     if ($script:AuthenticationMode -eq 'Windows') {
-        $windowsIdentity = $Request.User.Identity -as [System.Security.Principal.WindowsIdentity]
+        $windowsIdentity = $WindowsIdentity
         if (-not $windowsIdentity -or -not $windowsIdentity.IsAuthenticated) { return $null }
         if (-not (Test-MigrationWebWindowsGroupMembership -Identity $windowsIdentity -Group $script:WindowsAuthGroup)) {
             return $null
@@ -1299,9 +1301,9 @@ try {
             }
             $windowsSession = $null
             if ($script:AuthenticationMode -eq 'Windows') {
-                $windowsSession = Get-WebSession -Request $request
+                $windowsSession = Get-WebSession -Request $request -WindowsIdentity $context.User.Identity
                 if (-not $windowsSession) {
-                    $identity = $request.User.Identity
+                    $identity = $context.User.Identity
                     $isAuthenticated = $identity -and $identity.IsAuthenticated
                     $statusCode = if ($isAuthenticated) { 403 } else { 401 }
                     $message = if ($isAuthenticated) {
@@ -1317,6 +1319,14 @@ try {
                     Send-WebJson -Response $response -StatusCode $statusCode -Value @{ error = $message; authMode = 'Windows' }
                     continue
                 }
+            }
+            # In Windows authentication mode, run in-process SQL and host-resource operations
+            # as the signed-in Windows user. Auth-store, audit-log, report-file, and migration/patch
+            # child-process operations intentionally keep running as the web-host identity.
+            $requestWindowsIdentity = $null
+            if ($script:AuthenticationMode -eq 'Windows') {
+                $requestWindowsIdentity = $context.User.Identity -as [System.Security.Principal.WindowsIdentity]
+                if ($requestWindowsIdentity -and -not $requestWindowsIdentity.IsAuthenticated) { $requestWindowsIdentity = $null }
             }
             if ($request.HttpMethod -eq 'GET' -and $request.Url.AbsolutePath -in @('/', '/index.html')) {
                 $indexPath = Join-Path $PSScriptRoot 'web\index.html'
@@ -1827,7 +1837,8 @@ try {
                     throw [System.InvalidOperationException]::new('Linked-server inventory is unavailable while migration or patching is running.')
                 }
                 $source = ([string]$body.Source).Trim()
-                $inventory = @(Invoke-DbaQuery -SqlInstance $source -Database master -EnableException -ErrorAction Stop -Query @'
+                $inventory = @(Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                    Invoke-DbaQuery -SqlInstance $source -Database master -EnableException -ErrorAction Stop -Query @'
 SELECT
     s.name AS LinkedServer,
     s.provider AS Provider,
@@ -1857,7 +1868,8 @@ OUTER APPLY (
 ) AS ll
 WHERE s.is_linked = 1
 ORDER BY s.name;
-'@)
+'@
+                })
                 $definitions = @($inventory | ForEach-Object {
                     @{
                         LinkedServer = [string]$_.LinkedServer
@@ -1890,7 +1902,9 @@ ORDER BY s.name;
                 $pair = @(ConvertTo-WebPairs -Pairs @($body.Pair))[0]
                 $validationConfiguration = $script:WebConfiguration.Clone()
                 $validationConfiguration.SourceTargets = @($pair)
-                $validation = @(Test-MigrationConfiguration -Configuration $validationConfiguration)
+                $validation = @(Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                    Test-MigrationConfiguration -Configuration $validationConfiguration
+                })
                 $failedValidationCount = @($validation | Where-Object Status -eq 'Failed').Count
                 Write-WebAuditRecord -Action 'Migration pair validated' -Actor $session.Username `
                     -Outcome $(if ($failedValidationCount -eq 0) { 'Succeeded' } else { 'Failed' }) -Details @{
@@ -1934,8 +1948,10 @@ ORDER BY s.name;
                         $databaseNames.Add($normalizedDatabaseName)
                     }
                 }
-                $availableDatabases = @(Get-MigrationDatabase -SqlInstance $pair.Source -Configuration $script:WebConfiguration |
-                    ForEach-Object { [string]$_.Name })
+                $availableDatabases = @(Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                    Get-MigrationDatabase -SqlInstance $pair.Source -Configuration $script:WebConfiguration |
+                        ForEach-Object { [string]$_.Name }
+                })
                 $invalidDatabases = @($databaseNames | Where-Object { $_ -notin $availableDatabases })
                 if ($invalidDatabases.Count -gt 0) {
                     throw [ArgumentException]::new("Refresh discovery; database(s) not available for assessment on source '$($pair.Source)': $($invalidDatabases -join ', ').")
@@ -1953,8 +1969,10 @@ ORDER BY s.name;
                     $bufferPercent = if ($script:WebConfiguration.Contains('RestoreSpaceBufferPercent')) {
                         [double]$script:WebConfiguration.RestoreSpaceBufferPercent
                     } else { 20 }
-                    $assessments = @(Get-MigrationReadinessAssessment -Source $pair.Source -Target $pair.Target `
-                        -Databases $databaseNames.ToArray() -MigrationMode $pair.MigrationMode -BufferPercent $bufferPercent)
+                    $assessments = @(Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                        Get-MigrationReadinessAssessment -Source $pair.Source -Target $pair.Target `
+                            -Databases $databaseNames.ToArray() -MigrationMode $pair.MigrationMode -BufferPercent $bufferPercent
+                    })
                 }
                 catch {
                     Write-WebAuditRecord -Action 'Migration readiness assessment completed' -Actor $session.Username `
@@ -2007,7 +2025,7 @@ ORDER BY s.name;
                 $serverBuilds = [System.Collections.Generic.List[object]]::new()
                 $levelErrors = [System.Collections.Generic.List[string]]::new()
                 foreach ($target in $targets) {
-                    try { $serverBuilds.Add((Get-WebServerPatchLevel -Target $target)) }
+                    try { $serverBuilds.Add((Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock { Get-WebServerPatchLevel -Target $target })) }
                     catch { $levelErrors.Add("$($target.SqlInstance): $($_.Exception.Message)") }
                 }
                 if ($serverBuilds.Count -eq 0 -and $levelErrors.Count -gt 0) {
@@ -2030,7 +2048,7 @@ ORDER BY s.name;
                     throw [ArgumentException]::new('Targets must be provided as an array.')
                 }
                 $levels = foreach ($target in @(ConvertTo-WebPatchTargets -Selections @($body.Targets))) {
-                    try { Get-WebServerPatchLevel -Target $target }
+                    try { Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock { Get-WebServerPatchLevel -Target $target } }
                     catch { @{ SqlInstance = $target.SqlInstance; Role = $target.Role; PairIndex = $target.PairIndex; Error = $_.Exception.Message } }
                 }
                 Send-WebJson -Response $response -StatusCode 200 -Value @{ levels = @($levels) }
@@ -2049,7 +2067,8 @@ ORDER BY s.name;
                 $patch = Get-WebPatchCatalogRecord -KB $kb
                 $targets = @(ConvertTo-WebPatchTargets -Selections @($body.Targets))
                 $results = @($targets | ForEach-Object {
-                    $assessment = Get-MigrationSqlServerPatchAssessment -SqlInstance $_.SqlInstance -KB $kb
+                    $assessmentTarget = $_.SqlInstance
+                    $assessment = Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock { Get-MigrationSqlServerPatchAssessment -SqlInstance $assessmentTarget -KB $kb }
                     $assessment | Add-Member -NotePropertyName Role -NotePropertyValue $_.Role -Force
                     $assessment | Add-Member -NotePropertyName PairIndex -NotePropertyValue $_.PairIndex -Force
                     $assessment
@@ -2075,9 +2094,14 @@ ORDER BY s.name;
                 }
                 $sqlInstance = ([string]$body.SqlInstance).Trim()
                 try {
-                    $connection = Connect-DbaInstance -SqlInstance $sqlInstance -ErrorAction Stop
-                    $databases = @(Get-MigrationDatabase -SqlInstance $sqlInstance -Configuration $script:WebConfiguration |
-                        Select-Object Name, SizeMB, Compatibility, Status, RecoveryModel)
+                    $discovered = Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                        $userConnection = Connect-DbaInstance -SqlInstance $sqlInstance -ErrorAction Stop
+                        $userDatabases = @(Get-MigrationDatabase -SqlInstance $sqlInstance -Configuration $script:WebConfiguration |
+                            Select-Object Name, SizeMB, Compatibility, Status, RecoveryModel)
+                        [pscustomobject]@{ Connection = $userConnection; Databases = $userDatabases }
+                    }
+                    $connection = $discovered.Connection
+                    $databases = @($discovered.Databases)
                 }
                 catch {
                     $connectionFailure = $_.Exception.GetBaseException()
@@ -2086,7 +2110,12 @@ ORDER BY s.name;
                             SqlInstance = $sqlInstance
                             ErrorType = $connectionFailure.GetType().Name
                         }
-                    $failureMessage = "Could not connect to or read databases from SQL instance '$sqlInstance'. SQL operations run as the Windows identity hosting the web app, not as the signed-in application user. Verify that the host identity can reach this SQL Server and has permission to connect and read database metadata. SQL error: $($connectionFailure.Message)"
+                    $identityNote = if ($script:AuthenticationMode -eq 'Windows') {
+                        "SQL operations run as the signed-in Windows user '$($session.Username)'. If '$sqlInstance' is not on the web-host computer, the web-host account or computer also needs Kerberos constrained delegation to that SQL Server; without it the remote connection fails as NT AUTHORITY\ANONYMOUS LOGON."
+                    } else {
+                        'SQL operations run as the Windows identity hosting the web app, not as the signed-in application user.'
+                    }
+                    $failureMessage = "Could not connect to or read databases from SQL instance '$sqlInstance'. $identityNote Verify that identity can reach this SQL Server and has permission to connect and read database metadata. SQL error: $($connectionFailure.Message)"
                     Write-WebHostLog -Level Error -Message "SQL instance discovery failed for '$sqlInstance' requested by '$($session.Username)': $($connectionFailure.ToString())"
                     Send-WebJson -Response $response -StatusCode 502 -Value @{
                         error = $failureMessage
@@ -2125,10 +2154,15 @@ ORDER BY s.name;
                     ExcludeDatabases = @($script:WebConfiguration.ExcludeDatabases)
                     RestoreSpaceBufferPercent = [double]$script:WebConfiguration.RestoreSpaceBufferPercent
                 }
-                $results = @(Get-MigrationDiscovery -Configuration $discoveryConfiguration)
+                $results = @(Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                    Get-MigrationDiscovery -Configuration $discoveryConfiguration
+                })
                 foreach ($result in $results) {
+                    $databaseNameOnTarget = [string]$result.Database
                     $result | Add-Member -NotePropertyName TargetExists -NotePropertyValue (
-                        Test-MigrationDatabaseExists -SqlInstance $pair.Target -Database ([string]$result.Database)
+                        Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                            Test-MigrationDatabaseExists -SqlInstance $pair.Target -Database $databaseNameOnTarget
+                        }
                     ) -Force
                 }
                 Write-WebAuditRecord -Action 'Migration pair discovered' -Actor $session.Username -Outcome 'Succeeded' -Details @{
@@ -2182,7 +2216,7 @@ ORDER BY s.name;
                 $results = @($uniqueInstances | ForEach-Object {
                     $sqlInstance = $_
                     try {
-                        $disks = @(Get-MigrationDiskUsage -SqlInstance $sqlInstance)
+                        $disks = @(Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock { Get-MigrationDiskUsage -SqlInstance $sqlInstance })
                         @{
                             instance = $sqlInstance
                             computerName = if ($disks.Count -gt 0) { [string]$disks[0].ComputerName } else { $null }
@@ -2365,7 +2399,9 @@ ORDER BY volumes.volume_mount_point;
                     }
                     try {
                         $summaryRows = @(ConvertTo-WebCustomSqlRows -RawRows @(
-                            Invoke-DbaQuery -SqlInstance $sqlInstance -Database master -EnableException -ErrorAction Stop -Query $performanceQuery
+                            Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                                Invoke-DbaQuery -SqlInstance $sqlInstance -Database master -EnableException -ErrorAction Stop -Query $performanceQuery
+                            }
                         ))
                         if ($summaryRows.Count -eq 0) {
                             throw [System.InvalidOperationException]::new('SQL Server returned no performance data.')
@@ -2391,7 +2427,9 @@ ORDER BY volumes.volume_mount_point;
                         }
                         try {
                             $requestRows = @(ConvertTo-WebCustomSqlRows -RawRows @(
-                                Invoke-DbaQuery -SqlInstance $sqlInstance -Database master -EnableException -ErrorAction Stop -Query $requestsQuery
+                                Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                                    Invoke-DbaQuery -SqlInstance $sqlInstance -Database master -EnableException -ErrorAction Stop -Query $requestsQuery
+                                }
                             ))
                             $result.requests = @($requestRows | ForEach-Object {
                                 @{
@@ -2419,7 +2457,9 @@ ORDER BY volumes.volume_mount_point;
 
                         try {
                             $diskRows = @(ConvertTo-WebCustomSqlRows -RawRows @(
-                                Invoke-DbaQuery -SqlInstance $sqlInstance -Database master -EnableException -ErrorAction Stop -Query $diskQuery
+                                Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                                    Invoke-DbaQuery -SqlInstance $sqlInstance -Database master -EnableException -ErrorAction Stop -Query $diskQuery
+                                }
                             ))
                             $result.disks = @($diskRows | ForEach-Object {
                                 @{
@@ -2484,7 +2524,9 @@ ORDER BY volumes.volume_mount_point;
                         TargetCount = $sqlInstances.Count
                     }
                     try {
-                        $batchResults = @(Invoke-MigrationCustomSqlBatch -SqlInstances $sqlInstances -Database $database -Query ([string]$body.Query))
+                        $batchResults = @(Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                            Invoke-MigrationCustomSqlBatch -SqlInstances $sqlInstances -Database $database -Query ([string]$body.Query)
+                        })
                     }
                     catch {
                         Write-WebAuditRecord -Action 'Custom SQL executed' -Actor $session.Username -Outcome 'Failed' -Details @{
@@ -2558,7 +2600,9 @@ ORDER BY volumes.volume_mount_point;
                     TargetCount = 1
                 }
                 try {
-                    $rawRows = @(Invoke-MigrationCustomSql -SqlInstance $sqlInstance -Database $database -Query $query)
+                    $rawRows = @(Invoke-MigrationWebImpersonated -Identity $requestWindowsIdentity -ScriptBlock {
+                        Invoke-MigrationCustomSql -SqlInstance $sqlInstance -Database $database -Query $query
+                    })
                 }
                 catch {
                     Write-WebAuditRecord -Action 'Custom SQL executed' -Actor $session.Username -Outcome 'Failed' -Details @{
@@ -2837,7 +2881,11 @@ ORDER BY volumes.volume_mount_point;
                 }
             }
             try {
-                Send-WebJson -Response $response -StatusCode $statusCode -Value @{ error = $_.Exception.Message }
+                $errorMessage = $_.Exception.Message
+                if ($script:AuthenticationMode -eq 'Windows' -and $errorMessage -match 'ANONYMOUS LOGON') {
+                    $errorMessage += ' The signed-in Windows identity could not be delegated to a remote server. Ask a domain administrator to configure Kerberos constrained delegation (or resource-based constrained delegation) from the web-host account or computer to the target SQL Server, then retry.'
+                }
+                Send-WebJson -Response $response -StatusCode $statusCode -Value @{ error = $errorMessage }
             }
             catch {
                 Write-WebHostLog -Level Error -Message "Could not send web error response: $($_.Exception.ToString())"
