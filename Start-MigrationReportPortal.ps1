@@ -280,7 +280,19 @@ Write-Host 'Press Ctrl+C to stop.'
 
 try {
     while ($listener.IsListening) {
-        $context = $listener.GetContext()
+        # Bounded async accept so Ctrl+C stops the portal even when no request is in flight.
+        $contextTask = $listener.GetContextAsync()
+        try {
+            while (-not $contextTask.Wait(250)) { }
+        }
+        catch [System.Management.Automation.PipelineStoppedException] {
+            throw
+        }
+        catch {
+            break
+        }
+        if (-not $contextTask.IsCompletedSuccessfully) { break }
+        $context = $contextTask.Result
         try {
             $path = $context.Request.Url.AbsolutePath.TrimEnd('/')
             $name = $context.Request.QueryString['name']

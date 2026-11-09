@@ -1252,7 +1252,22 @@ Write-Output 'Use Ctrl+C to stop the web host. Do not stop the host while a migr
 Write-WebHostLog -Level Information -Message "Web host started at $($script:Origin)."
 try {
     while ($script:Listener.IsListening) {
-        $context = $script:Listener.GetContext()
+        # Accept with a bounded async wait: a blocking GetContext() cannot be interrupted
+        # by Ctrl+C until a request arrives. Wait(250) returns to the pipeline every
+        # 250 ms, so an operator's Ctrl+C is honored promptly even when idle.
+        $contextTask = $script:Listener.GetContextAsync()
+        try {
+            while (-not $contextTask.Wait(250)) { }
+        }
+        catch [System.Management.Automation.PipelineStoppedException] {
+            throw
+        }
+        catch {
+            # The listener was stopped while waiting for a request; leave the accept loop.
+            break
+        }
+        if (-not $contextTask.IsCompletedSuccessfully) { break }
+        $context = $contextTask.Result
         $request = $context.Request
         $response = $context.Response
         $script:CurrentAuditRequestId = [guid]::NewGuid().ToString('N')
@@ -2832,6 +2847,9 @@ ORDER BY volumes.volume_mount_point;
             $response.Close()
         }
     }
+}
+catch [System.Management.Automation.PipelineStoppedException] {
+    # Ctrl+C requested by the operator: a normal shutdown, not an unexpected stop.
 }
 catch {
     Write-WebHostLog -Level Critical -Message "Web host listener stopped unexpectedly: $($_.Exception.ToString())"
