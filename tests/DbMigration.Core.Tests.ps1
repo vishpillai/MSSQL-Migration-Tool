@@ -18,6 +18,64 @@ Describe 'Schema-only transfer result handling' {
     }
 }
 
+Describe 'Migration file logging' {
+    AfterEach {
+        InModuleScope DbMigration.Core {
+            $script:MigrationLogPath = $null
+        }
+    }
+
+    It 'appends parseable JSONL progress records' {
+        $logPath = Join-Path $TestDrive 'logs\migration.jsonl'
+        $progressPath = Join-Path $TestDrive 'progress'
+        Set-MigrationLogPath -Path $logPath
+
+        Write-MigrationProgressEvent -ProgressPath $progressPath -Source 'source01' -Target 'target01' `
+            -Database 'appdb' -Stage 'Backup' -Status 'InProgress' -PercentComplete 35 -Message 'Backup started.'
+        Write-MigrationLogRecord -Record @{ Level = 'Error'; Event = 'TestFailure'; Message = 'Example failure.' }
+
+        $records = @(Get-Content -LiteralPath $logPath | ForEach-Object { ConvertFrom-Json -InputObject $_ })
+        $records.Count | Should -Be 2
+        $records[0].Event | Should -Be 'Progress'
+        $records[0].Database | Should -Be 'appdb'
+        $records[0].PercentComplete | Should -Be 35
+        $records[1].Event | Should -Be 'TestFailure'
+    }
+}
+
+Describe 'CDC schema-only migration readiness' {
+    BeforeAll {
+        Import-Module dbatools -ErrorAction Stop
+    }
+
+    It 'allows schema-only readiness when CDC is enabled without querying target CDC' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Transfer {
+            [pscustomobject]@{ IsCdcEnabled = $true }
+        }
+
+        $result = Test-MigrationCdcReadiness -Source source -Target target -Database AAD_ARCHIVE
+
+        $result.Status | Should -Be 'Passed'
+        $result.SourceCdcEnabled | Should -BeTrue
+        $result.Message | Should -Match 'will not copy CDC configuration or history'
+        $result.Message | Should -Match 'source remains unchanged'
+        Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.Transfer -Times 1 -ParameterFilter {
+            $SqlInstance.ComputerName -eq 'source' -and $Database -eq 'master' -and $Query -match '^\s*SELECT'
+        }
+    }
+
+    It 'allows readiness when CDC is disabled' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Transfer {
+            [pscustomobject]@{ IsCdcEnabled = $false }
+        }
+
+        $result = Test-MigrationCdcReadiness -Source source -Target target -Database appdb
+
+        $result.Status | Should -Be 'Passed'
+        $result.SourceCdcEnabled | Should -BeFalse
+    }
+}
+
 Describe 'Server object migration' {
     BeforeAll {
         Import-Module dbatools -ErrorAction Stop

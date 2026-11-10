@@ -82,26 +82,17 @@ WHERE name = N'$escapedDatabase';
     }
 
     $cdcEnabled = [bool]$sourceFeatures[0].IsCdcEnabled
-    if ($cdcEnabled) {
-        return [pscustomobject]@{
-            Source = $Source
-            Target = $Target
-            Database = $Database
-            Stage = 'CdcPreflight'
-            Status = 'Failed'
-            SourceCdcEnabled = $true
-            Message = "Source database '$Database' has Change Data Capture enabled. Schema-only transfer cannot reliably recreate CDC capture instances and generated functions; use backup/restore or configure CDC separately after schema migration. No target database changes were made."
-        }
-    }
-
     [pscustomobject]@{
         Source = $Source
         Target = $Target
         Database = $Database
         Stage = 'CdcPreflight'
-        Status = 'Passed'
-        SourceCdcEnabled = $false
-        Message = 'Source database does not have Change Data Capture enabled.'
+        Status = 'Passed'; SourceCdcEnabled = $cdcEnabled
+        Message = if ($cdcEnabled) {
+            'Source CDC is enabled. Schema-only migration will not copy CDC configuration or history; the source remains unchanged.'
+        } else {
+            'Source database does not have Change Data Capture enabled.'
+        }
     }
 }
 
@@ -680,6 +671,11 @@ function Invoke-DatabaseSchemaOnlyMigration {
         }
         Set-MigrationTargetCompatibilityLevel -SqlInstance $Pair.Target -DatabaseName $TargetDatabaseName `
             -CompatibilityLevel $compatibilityLevel
+        $cdcSummary = ''
+        if ($cdcReadiness.SourceCdcEnabled) {
+            $cdcSummary = ' Source CDC configuration and change history were intentionally omitted; the source remained unchanged.'
+            $null = & $emit 'CdcConfiguration' 'Skipped' 88 $cdcSummary.Trim()
+        }
         $null = & $emit 'SchemaTransfer' 'InProgress' 90 'Schema transfer completed; verifying target accessibility and absence of table rows.'
         $targetDatabase = Get-DbaDatabase -SqlInstance $destinationServer -Database $TargetDatabaseName -EnableException -ErrorAction Stop |
             Select-Object -First 1
@@ -699,7 +695,7 @@ WHERE p.index_id IN (0, 1);
         $objectCount = Invoke-DbaQuery -SqlInstance $destinationServer -Database $TargetDatabaseName `
             -Query "SELECT COUNT_BIG(*) AS SchemaObjectCount FROM sys.objects WHERE is_ms_shipped = 0;" `
             -EnableException -ErrorAction Stop | Select-Object -Last 1
-        $message = "Schema-only transfer completed; copied schema objects without table data. Verified $($objectCount.SchemaObjectCount) user objects and zero user-table rows."
+        $message = "Schema-only transfer completed; copied schema objects without table data. Verified $($objectCount.SchemaObjectCount) user objects and zero user-table rows.$cdcSummary"
         if ($skippedUserNames.Count -gt 0) {
             $message += " Skipped database user(s) with missing target logins: $($skippedUserNames -join ', ')."
         }

@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+$script:MigrationLogPath = $null
 
 function Get-MigrationSqlHostIdentity {
     param([Parameter(Mandatory)][string] $SqlInstance)
@@ -622,6 +623,33 @@ function Get-MigrationBackupStripeFiles {
     @($indexedFiles | Sort-Object Stripe | ForEach-Object { $_.File })
 }
 
+function Set-MigrationLogPath {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $Path)
+
+    $script:MigrationLogPath = [System.IO.Path]::GetFullPath($Path)
+    $directory = Split-Path -Parent $script:MigrationLogPath
+    $null = New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop
+}
+
+function Write-MigrationLogRecord {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][System.Collections.IDictionary] $Record)
+
+    if (-not $script:MigrationLogPath) { return }
+    try {
+        $entry = [ordered]@{ Timestamp = [DateTime]::UtcNow.ToString('o') }
+        foreach ($key in $Record.Keys) {
+            $entry[[string]$key] = $Record[$key]
+        }
+        $line = (ConvertTo-Json -InputObject $entry -Depth 10 -Compress) + [Environment]::NewLine
+        [System.IO.File]::AppendAllText($script:MigrationLogPath, $line, [System.Text.UTF8Encoding]::new($false))
+    }
+    catch {
+        [Console]::Error.WriteLine("Could not append migration log '$($script:MigrationLogPath)': $($_.Exception.Message)")
+    }
+}
+
 function Write-MigrationProgressEvent {
     [CmdletBinding()]
     param(
@@ -661,6 +689,17 @@ function Write-MigrationProgressEvent {
         $json = ConvertTo-Json -InputObject $event -Compress
         [System.IO.File]::WriteAllText($temporaryPath, $json, [System.Text.UTF8Encoding]::new($false))
         [System.IO.File]::Move($temporaryPath, $eventPath)
+        Write-MigrationLogRecord -Record ([ordered]@{
+            Level = if ($Status -eq 'Failed') { 'Error' } else { 'Information' }
+            Event = 'Progress'
+            Source = $Source
+            Target = $Target
+            Database = $Database
+            Stage = $Stage
+            Status = $Status
+            PercentComplete = if ($PercentComplete -ge 0) { $PercentComplete } else { $null }
+            Message = $Message
+        })
     }
     finally {
         if (Test-Path -LiteralPath $temporaryPath) {
@@ -1065,4 +1104,4 @@ function Write-MigrationReports {
     [pscustomobject]@{ CsvPath = $csvPath; HtmlPath = $htmlPath }
 }
 
-Export-ModuleMember -Function Import-MigrationConfiguration, Set-MigrationSqlConnectionSettings, Set-MigrationTargetCompatibilityLevel, ConvertTo-MigrationTargetDatabaseName, Get-MigrationDatabaseTargetSettings, Get-MigrationTargetDatabaseDecision, Get-MigrationSourceTargetPairDefaults, Test-MigrationServerWorkEnabled, Get-MigrationDatabase, Test-MigrationDatabaseExists, Invoke-MigrationCustomSql, Invoke-MigrationCustomSqlBatch, Get-MigrationDiskUsage, Get-MigrationState, Get-MigrationStateKey, Get-MigrationBackupPath, Get-MigrationRunBackupDirectory, Get-MigrationDatabaseBackupDirectory, Get-MigrationBackupStripeFiles, Write-MigrationProgressEvent, Wait-MigrationControl, Remove-MigrationRunBackupDirectory, Set-MigrationState, Write-MigrationReports
+Export-ModuleMember -Function Import-MigrationConfiguration, Set-MigrationSqlConnectionSettings, Set-MigrationTargetCompatibilityLevel, ConvertTo-MigrationTargetDatabaseName, Get-MigrationDatabaseTargetSettings, Get-MigrationTargetDatabaseDecision, Get-MigrationSourceTargetPairDefaults, Test-MigrationServerWorkEnabled, Get-MigrationDatabase, Test-MigrationDatabaseExists, Invoke-MigrationCustomSql, Invoke-MigrationCustomSqlBatch, Get-MigrationDiskUsage, Get-MigrationState, Get-MigrationStateKey, Get-MigrationBackupPath, Get-MigrationRunBackupDirectory, Get-MigrationDatabaseBackupDirectory, Get-MigrationBackupStripeFiles, Set-MigrationLogPath, Write-MigrationLogRecord, Write-MigrationProgressEvent, Wait-MigrationControl, Remove-MigrationRunBackupDirectory, Set-MigrationState, Write-MigrationReports

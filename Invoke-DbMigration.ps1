@@ -14,6 +14,9 @@ param(
     [string] $OutputPath,
 
     [Parameter()]
+    [string] $LogPath,
+
+    [Parameter()]
     [string] $ProgressPath,
 
     [Parameter()]
@@ -34,6 +37,34 @@ foreach ($moduleName in @(
     'DbMigration.PostMigration.psm1'
 )) {
     Import-Module (Join-Path $moduleDirectory $moduleName) -Force
+}
+$script:MigrationLogRunId = [guid]::NewGuid().ToString('N')
+if (-not $LogPath -and -not $ProgressPath) {
+    $logDirectory = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'DbMigration\logs'
+    $logSuffix = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $LogPath = Join-Path $logDirectory "Migration-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')-$logSuffix.jsonl"
+}
+if ($LogPath) {
+    Set-MigrationLogPath -Path $LogPath
+    Write-MigrationLogRecord -Record @{
+        Level = 'Information'
+        Event = 'RunStarted'
+        RunId = $script:MigrationLogRunId
+        Mode = $Mode
+        Configuration = [System.IO.Path]::GetFullPath($ConfigPath)
+    }
+    Write-Host "Migration log: $([System.IO.Path]::GetFullPath($LogPath))"
+}
+trap {
+    $runError = $_
+    Write-MigrationLogRecord -Record @{
+        Level = 'Error'
+        Event = 'RunFailed'
+        RunId = $script:MigrationLogRunId
+        ErrorType = $runError.Exception.GetType().FullName
+        Message = $runError.Exception.Message
+    }
+    throw $runError
 }
 Import-Module dbatools -ErrorAction Stop
 
@@ -59,6 +90,7 @@ if (-not $OutputPath) {
 if ($Mode -eq 'Discover') {
     $results = @(Get-MigrationDiscovery -Configuration $configuration)
     $null = Write-MigrationReports -Rows $results -OutputPath $OutputPath -Name 'Discovery'
+    Write-MigrationLogRecord -Record @{ Level = 'Information'; Event = 'RunCompleted'; RunId = $script:MigrationLogRunId; Mode = $Mode; ResultCount = $results.Count }
     $results
     return
 }
@@ -66,6 +98,14 @@ if ($Mode -eq 'Discover') {
 if ($Mode -eq 'Validate') {
     $results = @(Test-MigrationConfiguration -Configuration $configuration)
     $null = Write-MigrationReports -Rows $results -OutputPath $OutputPath -Name 'Validation'
+    Write-MigrationLogRecord -Record @{
+        Level = if (@($results | Where-Object Status -eq 'Failed').Count -gt 0) { 'Error' } else { 'Information' }
+        Event = 'RunCompleted'
+        RunId = $script:MigrationLogRunId
+        Mode = $Mode
+        ResultCount = $results.Count
+        FailedCount = @($results | Where-Object Status -eq 'Failed').Count
+    }
     $results
     if (@($results | Where-Object Status -eq 'Failed').Count -gt 0) {
         throw 'Migration validation failed. Review the generated reports before proceeding.'
@@ -532,8 +572,29 @@ foreach ($pair in $configuration.SourceTargets) {
 }
 
 $null = Write-MigrationReports -Rows @($migrationResults) -OutputPath $OutputPath -Name 'Migration'
+foreach ($result in $migrationResults) {
+    Write-MigrationLogRecord -Record @{
+        Level = if ($result.Status -eq 'Failed') { 'Error' } else { 'Information' }
+        Event = 'MigrationResult'
+        RunId = $script:MigrationLogRunId
+        Source = $result.Source
+        Target = $result.Target
+        Database = $result.Database
+        Stage = $result.Stage
+        Status = $result.Status
+        Message = $result.Message
+    }
+}
 $migrationResults
 $migrationFailed = @($migrationResults | Where-Object Status -eq 'Failed').Count -gt 0
+Write-MigrationLogRecord -Record @{
+    Level = if ($migrationFailed) { 'Error' } else { 'Information' }
+    Event = 'RunCompleted'
+    RunId = $script:MigrationLogRunId
+    Mode = $Mode
+    ResultCount = $migrationResults.Count
+    FailedCount = @($migrationResults | Where-Object Status -eq 'Failed').Count
+}
 if ($ProgressPath -and -not $SuppressOverallProgress) {
     $finalStatus = if ($migrationFailed) { 'Failed' } else { 'Completed' }
     Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source '' -Target '' `

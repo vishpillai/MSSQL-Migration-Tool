@@ -68,6 +68,10 @@ Run the script from the project directory (or provide absolute paths):
 .\Invoke-DbMigration.ps1 -Mode Migrate
 ```
 
+Standalone CLI runs write structured JSONL logs to `%LOCALAPPDATA%\DbMigration\logs` by default; pass `-LogPath <path>` to choose another file. GUI migrations write the same structured records alongside their existing readable log. Web migrations continue using the web host's existing run logs. Records contain timestamps, run mode, migration progress, endpoints, database names, outcomes, and error messages; they do not capture passwords or custom SQL text. Restrict access to log folders according to your operational privacy policy.
+
+Schema-only migration leaves the source unchanged and copies schema without CDC capture configuration or change history. The target does not begin CDC capture; configure CDC separately on the target only if needed.
+
 For an interactive Windows desktop interface, run:
 
 ```powershell

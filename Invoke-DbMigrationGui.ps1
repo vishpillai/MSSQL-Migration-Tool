@@ -491,6 +491,9 @@ $startButton.Add_Click({
         $null = New-Item -ItemType Directory -Path $logDirectory -Force
         $runLogSuffix = [guid]::NewGuid().ToString('N').Substring(0, 8)
         $script:runLogPath = Join-Path $logDirectory "Migration-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')-$runLogSuffix.log"
+        $script:structuredLogPath = [System.IO.Path]::ChangeExtension($script:runLogPath, '.jsonl')
+        [void]$startInfo.ArgumentList.Add('-LogPath')
+        [void]$startInfo.ArgumentList.Add($script:structuredLogPath)
         $script:migrationStartedAt = [DateTime]::Now
         $script:lastMigrationOutputAt = $script:migrationStartedAt
         $script:lastHeartbeatAt = $script:migrationStartedAt
@@ -505,6 +508,7 @@ $startButton.Add_Click({
             "Databases: $databaseSummary"
             "Reports: $($runConfiguration.OutputPath)"
             "State: $([System.IO.Path]::GetFullPath($stateBox.Text.Trim()))"
+            "Structured log: $($script:structuredLogPath)"
         ) | Set-Content -LiteralPath $script:runLogPath -Encoding utf8
 
         $script:logQueue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
@@ -521,7 +525,7 @@ $startButton.Add_Click({
         $discoverButton.Enabled = $false
         $statusLabel.Text = 'Migration is running...'
         $logBox.Clear()
-        $logBox.AppendText("Migration started. Database selection: $databaseSummary`r`nDetailed log: $($script:runLogPath)`r`n")
+        $logBox.AppendText("Migration started. Database selection: $databaseSummary`r`nDetailed log: $($script:runLogPath)`r`nStructured log: $($script:structuredLogPath)`r`n")
         $timer.Start()
     }
     catch {
