@@ -266,7 +266,7 @@ function Install-OlaHallengrenMaintenanceSolution {
     )
 
     Install-DbaMaintenanceSolution -SqlInstance $SqlInstance -Database master `
-        -Confirm:$false -EnableException -ErrorAction Stop
+        -ReplaceExisting -Confirm:$false -EnableException -ErrorAction Stop
 }
 
 Export-ModuleMember -Function Invoke-ServerObjectMigration, Invoke-LinkedServerConfiguration, Invoke-DatabasePostMigration, Install-OlaHallengrenMaintenanceSolution

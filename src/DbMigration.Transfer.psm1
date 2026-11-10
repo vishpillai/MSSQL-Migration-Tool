@@ -50,6 +50,61 @@ function Invoke-MigrationSafeRestore {
     }
 }
 
+function Test-MigrationCdcReadiness {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Source,
+        [Parameter(Mandatory)][string] $Target,
+        [Parameter(Mandatory)][string] $Database
+    )
+
+    $escapedDatabase = $Database.Replace("'", "''")
+    try {
+        $sourceFeatures = @(Invoke-DbaQuery -SqlInstance $Source -Database master -EnableException -ErrorAction Stop -Query @"
+SELECT is_cdc_enabled AS IsCdcEnabled
+FROM sys.databases
+WHERE name = N'$escapedDatabase';
+"@)
+        if ($sourceFeatures.Count -ne 1) {
+            throw "Could not determine whether source database '$Database' has CDC enabled."
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Database = $Database
+            Stage = 'CdcPreflight'
+            Status = 'Failed'
+            SourceCdcEnabled = $null
+            Message = "Could not verify CDC readiness: $($_.Exception.Message)"
+        }
+    }
+
+    $cdcEnabled = [bool]$sourceFeatures[0].IsCdcEnabled
+    if ($cdcEnabled) {
+        return [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Database = $Database
+            Stage = 'CdcPreflight'
+            Status = 'Failed'
+            SourceCdcEnabled = $true
+            Message = "Source database '$Database' has Change Data Capture enabled. Schema-only transfer cannot reliably recreate CDC capture instances and generated functions; use backup/restore or configure CDC separately after schema migration. No target database changes were made."
+        }
+    }
+
+    [pscustomobject]@{
+        Source = $Source
+        Target = $Target
+        Database = $Database
+        Stage = 'CdcPreflight'
+        Status = 'Passed'
+        SourceCdcEnabled = $false
+        Message = 'Source database does not have Change Data Capture enabled.'
+    }
+}
+
 function Test-MigrationFullTextReadiness {
     [CmdletBinding()]
     param(
@@ -525,6 +580,11 @@ function Invoke-DatabaseSchemaOnlyMigration {
             }
         }
 
+        $cdcReadiness = Test-MigrationCdcReadiness -Source $Pair.Source -Target $Pair.Target -Database $Database
+        if ($cdcReadiness.Status -ne 'Passed') {
+            throw $cdcReadiness.Message
+        }
+
         $fullTextReadiness = Test-MigrationFullTextReadiness -Source $Pair.Source -Target $Pair.Target -Database $Database
         if ($fullTextReadiness.Status -ne 'Passed') {
             throw $fullTextReadiness.Message
@@ -681,4 +741,4 @@ WHERE p.index_id IN (0, 1);
     }
 }
 
-Export-ModuleMember -Function Invoke-MigrationSafeRestore, Test-MigrationFullTextReadiness, Invoke-MigrationTrackedDatabaseOperation, Invoke-DatabaseMigration, Invoke-DatabaseSchemaOnlyMigration
+Export-ModuleMember -Function Invoke-MigrationSafeRestore, Test-MigrationCdcReadiness, Test-MigrationFullTextReadiness, Invoke-MigrationTrackedDatabaseOperation, Invoke-DatabaseMigration, Invoke-DatabaseSchemaOnlyMigration

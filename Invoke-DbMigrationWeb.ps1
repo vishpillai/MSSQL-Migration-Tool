@@ -826,6 +826,30 @@ function Get-WebPair {
     return $script:WebConfiguration.SourceTargets[$Index]
 }
 
+function Get-WebSqlHostIdentity {
+    param([Parameter(Mandatory)][string] $SqlInstance)
+
+    $hostName = ($SqlInstance.Trim() -split '[\\,]', 2)[0].Trim().TrimEnd('.')
+    if ($hostName -in @('.', '(local)', 'localhost', '127.0.0.1', '::1')) {
+        $hostName = $env:COMPUTERNAME
+    }
+    ($hostName -split '\.', 2)[0].ToLowerInvariant()
+}
+
+function Assert-WebInstanceNotConfiguredSource {
+    param([Parameter(Mandatory)][string] $SqlInstance)
+
+    $candidateHost = Get-WebSqlHostIdentity -SqlInstance $SqlInstance
+    foreach ($pair in $script:WebConfiguration.SourceTargets) {
+        $sourceHost = Get-WebSqlHostIdentity -SqlInstance ([string]$pair.Source)
+        if ([string]::Equals($candidateHost, $sourceHost, [StringComparison]::OrdinalIgnoreCase)) {
+            throw [System.InvalidOperationException]::new(
+                "Operation blocked: '$SqlInstance' is on configured source server '$($pair.Source)', which must remain unchanged."
+            )
+        }
+    }
+}
+
 function Start-WebMigration {
     param([Parameter(Mandatory)][System.Collections.IDictionary] $Body)
 
@@ -1442,6 +1466,10 @@ function Start-WebSqlServerPatch {
             throw [ArgumentException]::new('The update repository folder does not exist on the app host.')
         }
         foreach ($target in $targets) {
+            if ($target.Role -eq 'Source') {
+                throw [System.InvalidOperationException]::new("Patching configured source '$($target.SqlInstance)' is blocked; source servers must remain unchanged.")
+            }
+            Assert-WebInstanceNotConfiguredSource -SqlInstance ([string]$target.SqlInstance)
             $instanceHost = ([string]$target.SqlInstance -split '[\\,]')[0].Trim().ToLowerInvariant()
             $isLocalTarget = $instanceHost -in @('localhost', '.', '(local)', '127.0.0.1', '::1', $env:COMPUTERNAME.ToLowerInvariant())
             if ($isLocalTarget -and -not (Test-WebHostElevated)) {
@@ -2812,6 +2840,9 @@ ORDER BY volumes.volume_mount_point;
                         }
                         $_
                     })
+                    foreach ($sqlInstance in $sqlInstances) {
+                        Assert-WebInstanceNotConfiguredSource -SqlInstance $sqlInstance
+                    }
                     $database = if ($body.Contains('Database') -and -not [string]::IsNullOrWhiteSpace([string]$body.Database)) {
                         [string]$body.Database
                     }
@@ -2887,6 +2918,10 @@ ORDER BY volumes.volume_mount_point;
                     }
                     $sqlInstance = if ($role -eq 'Source') { [string]$pair.Source } else { [string]$pair.Target }
                 }
+                if ($role -eq 'Source') {
+                    throw [System.InvalidOperationException]::new("Custom SQL against configured source '$sqlInstance' is blocked; source servers must remain unchanged.")
+                }
+                Assert-WebInstanceNotConfiguredSource -SqlInstance $sqlInstance
                 $database = if ($body.Contains('Database') -and -not [string]::IsNullOrWhiteSpace([string]$body.Database)) {
                     [string]$body.Database
                 }

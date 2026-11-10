@@ -1,5 +1,15 @@
 Set-StrictMode -Version Latest
 
+function Get-MigrationSqlHostIdentity {
+    param([Parameter(Mandatory)][string] $SqlInstance)
+
+    $hostName = ($SqlInstance.Trim() -split '[\\,]', 2)[0].Trim().TrimEnd('.')
+    if ($hostName -in @('.', '(local)', 'localhost', '127.0.0.1', '::1')) {
+        $hostName = $env:COMPUTERNAME
+    }
+    ($hostName -split '\.', 2)[0].ToLowerInvariant()
+}
+
 function Import-MigrationConfiguration {
     [CmdletBinding()]
     param(
@@ -27,11 +37,23 @@ function Import-MigrationConfiguration {
                 throw "Each SourceTargets entry must define '$property'."
             }
         }
+        $pair.Source = ([string]$pair.Source).Trim()
+        $pair.Target = ([string]$pair.Target).Trim()
         if (-not $pair.Contains('MigrationMode')) {
             $pair.MigrationMode = 'Full'
         }
         if ([string]$pair.MigrationMode -notin @('Full', 'SchemaOnly')) {
             throw "MigrationMode must be 'Full' or 'SchemaOnly'."
+        }
+    }
+    $sourceInstances = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($pair in $configuration.SourceTargets) {
+        $null = $sourceInstances.Add((Get-MigrationSqlHostIdentity -SqlInstance ([string]$pair.Source)))
+    }
+    foreach ($pair in $configuration.SourceTargets) {
+        $targetHost = Get-MigrationSqlHostIdentity -SqlInstance ([string]$pair.Target)
+        if ($sourceInstances.Contains($targetHost)) {
+            throw "Target '$($pair.Target)' is on a host also configured as a source. Source and target servers must be distinct to prevent source-side changes."
         }
     }
     if ([int]$configuration.ThrottleLimit -lt 1 -or [int]$configuration.ThrottleLimit -gt 128) {

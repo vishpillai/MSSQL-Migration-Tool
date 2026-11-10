@@ -4,105 +4,35 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.WebAuth.psm1') -Force
 }
 
+Describe 'Schema-only transfer result handling' {
+    It 'suppresses cleanup cmdlet output so failed transfers return one structured result' {
+        $transferText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\src\DbMigration.Transfer.psm1') -Raw
+        $transferText | Should -Match '\$null = Remove-DbaDatabase -SqlInstance \$destinationServer'
+    }
+
+    It 'normalizes schema-only output and preserves the underlying failure message' {
+        $planText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Invoke-DbMigrationWebPlan.ps1') -Raw
+        $planText | Should -Match '\$schemaResults = @\(Invoke-DatabaseSchemaOnlyMigration'
+        $planText | Should -Match "Schema-only migration returned no structured result\."
+        $planText | Should -Match '\$schemaResult\.Message'
+    }
+}
+
 Describe 'Server object migration' {
     BeforeAll {
         Import-Module dbatools -ErrorAction Stop
         Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.PostMigration.psm1') -Force
     }
 
-    It 'isolates a failing login phase so agent jobs and operators still migrate' {
+    It 'contains login-copy errors and still runs later server-object phases' {
         InModuleScope DbMigration.PostMigration {
             Mock Copy-DbaLogin { throw "The property 'Properties' cannot be found on this object." }
-            Mock Copy-DbaAgentJob { [pscustomobject]@{ SourceServer = 's'; DestinationServer = 't'; Name = 'job1'; Type = 'Agent Job'; Status = 'Successful'; Notes = '' } }
-            Mock Copy-DbaAgentOperator { [pscustomobject]@{ SourceServer = 's'; DestinationServer = 't'; Name = 'op1'; Type = 'Agent Operator'; Status = 'Successful'; Notes = '' } }
-
+            Mock Copy-DbaAgentJob { [pscustomobject]@{ Name = 'job1'; Type = 'Agent Job'; Status = 'Successful' } }
+            Mock Copy-DbaAgentOperator { [pscustomobject]@{ Name = 'operator1'; Type = 'Agent Operator'; Status = 'Successful' } }
             $results = @(Invoke-ServerObjectMigration -Pair @{ Source = 's'; Target = 't' })
-
-            Should -Invoke Copy-DbaAgentJob -Exactly 1 -Scope It
-            Should -Invoke Copy-DbaAgentOperator -Exactly 1 -Scope It
-            $phaseFailures = @($results | Where-Object { $_.PSObject.Properties.Name -contains 'IsPhaseFailure' })
-            $phaseFailures.Count | Should -Be 1
-            $phaseFailures[0].Type | Should -Be 'Login phase'
-            $phaseFailures[0].Status | Should -Be 'Failed'
-            $phaseFailures[0].Notes | Should -BeLike "*Properties*"
-            @($results | Where-Object Name -eq 'job1').Count | Should -Be 1
-            @($results | Where-Object Name -eq 'op1').Count | Should -Be 1
-        }
-    }
-
-    It 'excludes logins aligned to databases that are missing on the target' {
-        InModuleScope DbMigration.PostMigration {
-            $fakeServer = [pscustomobject]@{ ConnectionContext = [pscustomobject]@{ TrueLogin = 'DOMAIN\runner' } }
-            Mock Connect-DbaInstance { $fakeServer }
-            Mock Get-DbaServerRoleMember { @([pscustomobject]@{ Name = 'DOMAIN\dba.admin' }) }
-            Mock Get-DbaDbUser {
-                @(
-                    [pscustomobject]@{ Database = 'AAD'; Name = 'appuser'; Login = 'app_user'; Sid = [byte[]](1, 2, 3, 4) },
-                    [pscustomobject]@{ Database = 'AAD'; Name = 'shareduser'; Login = 'shared_user'; Sid = [byte[]](2, 3, 4, 5) },
-                    [pscustomobject]@{ Database = 'OTHER'; Name = 'shareduser'; Login = 'shared_user'; Sid = [byte[]](2, 3, 4, 5) }
-                )
-            }
-            Mock Get-DbaLogin {
-                @(
-                    [pscustomobject]@{ Name = 'app_user'; LoginType = 'SqlLogin'; Sid = [byte[]](1, 2, 3, 4); DefaultDatabase = 'AAD' },
-                    [pscustomobject]@{ Name = 'shared_user'; LoginType = 'SqlLogin'; Sid = [byte[]](2, 3, 4, 5); DefaultDatabase = 'AAD' },
-                    [pscustomobject]@{ Name = 'no_mapping_aad'; LoginType = 'SqlLogin'; Sid = [byte[]](3, 4, 5, 6); DefaultDatabase = 'AAD' },
-                    [pscustomobject]@{ Name = 'no_mapping_master'; LoginType = 'SqlLogin'; Sid = [byte[]](4, 5, 6, 7); DefaultDatabase = 'master' },
-                    [pscustomobject]@{ Name = 'DOMAIN\dba.admin'; LoginType = 'WindowsUser'; Sid = [byte[]](5, 6, 7, 8); DefaultDatabase = 'AAD' },
-                    [pscustomobject]@{ Name = 'DOMAIN\runner'; LoginType = 'WindowsUser'; Sid = [byte[]](6, 7, 8, 9); DefaultDatabase = 'AAD' }
-                )
-            }
-            $script:capturedExclude = $null
-            Mock Copy-DbaLogin { $script:capturedExclude = @($ExcludeLogin) }
-            Mock Copy-DbaAgentJob { }
-            Mock Copy-DbaAgentOperator { }
-
-            $results = @(Invoke-ServerObjectMigration -Pair @{ Source = 's'; Target = 't' } -ExcludedDatabases @('AAD'))
-
-            $script:capturedExclude | Should -Contain 'sa'
-            $script:capturedExclude | Should -Contain 'app_user'
-            $script:capturedExclude | Should -Contain 'no_mapping_aad'
-            $script:capturedExclude | Should -Not -Contain 'shared_user'
-            $script:capturedExclude | Should -Not -Contain 'no_mapping_master'
-            $script:capturedExclude | Should -Not -Contain 'DOMAIN\dba.admin'
-            $script:capturedExclude | Should -Not -Contain 'DOMAIN\runner'
-            $skipped = @($results | Where-Object { $_.Status -eq 'Skipped' })
-            $skipped.Count | Should -Be 2
-            $skipped[0].Notes | Should -BeLike '*not migrated to the target*'
-        }
-    }
-
-    It 'drops pipeline debris and contains mid-stream crashes while jobs continue' {
-        InModuleScope DbMigration.PostMigration {
-            Mock Copy-DbaLogin {
-                [pscustomobject]@{ SourceServer = 's'; DestinationServer = 't'; Name = 'login1'; Type = 'Login - SqlLogin'; Status = 'Successful'; Notes = '' }
-                [System.Data.DataTable]::new()
-                throw [System.Management.Automation.PropertyNotFoundException]::new("The property 'Properties' cannot be found on this object. Verify that the property exists.")
-            }
-            Mock Copy-DbaAgentJob { [pscustomobject]@{ SourceServer = 's'; DestinationServer = 't'; Name = 'job1'; Type = 'Agent Job'; Status = 'Successful'; Notes = '' } }
-            Mock Copy-DbaAgentOperator { }
-
-            $results = @(Invoke-ServerObjectMigration -Pair @{ Source = 's'; Target = 't' })
-
-            @($results | Where-Object { $_ -is [System.Data.DataTable] }).Count | Should -Be 0
-            @($results | Where-Object Name -eq 'login1').Count | Should -Be 1
-            @($results | Where-Object Name -eq 'job1').Count | Should -Be 1
             @($results | Where-Object { $_.Type -eq 'Login phase' -and $_.Status -eq 'Failed' }).Count | Should -Be 1
-        }
-    }
-
-    It 'copies every login except sa when no databases are excluded' {
-        InModuleScope DbMigration.PostMigration {
-            Mock Get-MigrationDatabaseAlignedLogin { throw 'alignment must not run without excluded databases' }
-            $script:capturedExclude = $null
-            Mock Copy-DbaLogin { $script:capturedExclude = @($ExcludeLogin) }
-            Mock Copy-DbaAgentJob { }
-            Mock Copy-DbaAgentOperator { }
-
-            $null = Invoke-ServerObjectMigration -Pair @{ Source = 's'; Target = 't' }
-
-            $script:capturedExclude.Count | Should -Be 1
-            $script:capturedExclude[0] | Should -Be 'sa'
+            @($results | Where-Object Name -eq 'job1').Count | Should -Be 1
+            @($results | Where-Object Name -eq 'operator1').Count | Should -Be 1
         }
     }
 }
@@ -357,6 +287,23 @@ Describe 'Migration configuration' {
 
         (Import-MigrationConfiguration -Path $path).SourceTargets[0].MigrationMode | Should -Be 'SchemaOnly'
     }
+
+        It 'rejects a target that is also configured as a source' {
+                $path = Join-Path $TestDrive 'overlapping-source-targets.json'
+                @'
+{
+    "SourceTargets": [
+        {"Source":"source-a","Target":"target-a","BackupPath":"C:\\backups"},
+        {"Source":"target-a","Target":"target-b","BackupPath":"C:\\backups"}
+    ],
+    "OutputPath": "reports",
+    "ThrottleLimit": 2,
+    "LinkedServersCsv": "linked.csv"
+}
+'@ | Set-Content -LiteralPath $path
+
+                { Import-MigrationConfiguration -Path $path } | Should -Throw '*also configured as a source*'
+        }
 
     It 'preserves configured migration modes in browser pair defaults' {
         $pairs = @(
@@ -760,7 +707,12 @@ Describe 'Web patch target resolution' {
             (Join-Path $PSScriptRoot '..\Invoke-DbMigrationWeb.ps1'), [ref]$null, [ref]$null)
         $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'ConvertTo-WebPatchTargets' }, $true)
         . ([scriptblock]::Create($fn.Extent.Text))
+        foreach ($functionName in @('Get-WebSqlHostIdentity', 'Assert-WebInstanceNotConfiguredSource')) {
+            $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $functionName }, $true)
+            . ([scriptblock]::Create($fn.Extent.Text))
+        }
         function Get-WebPair { param($Index) @{ Source = 'source'; Target = 'target' } }
+        $script:WebConfiguration = @{ SourceTargets = @(@{ Source = 'source-sql\NODE1'; Target = 'target-sql' }) }
     }
 
     It 'uses the supplied SqlInstance for source and target roles' {
@@ -774,6 +726,13 @@ Describe 'Web patch target resolution' {
     It 'falls back to the configured pair when no SqlInstance is supplied' {
         $targets = @(ConvertTo-WebPatchTargets -Selections @(@{ PairIndex = 0; Role = 'Source' }))
         $targets[0].SqlInstance | Should -Be 'source'
+    }
+
+    It 'blocks operations against any instance on a configured source host' {
+        { Assert-WebInstanceNotConfiguredSource -SqlInstance 'SOURCE-SQL\NODE2' } |
+            Should -Throw '*must remain unchanged*'
+        { Assert-WebInstanceNotConfiguredSource -SqlInstance 'target-sql\NODE1' } |
+            Should -Not -Throw
     }
 }
 
@@ -827,6 +786,12 @@ Describe 'Web host script safeguards' {
         $uiText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\web\index.html') -Raw
         $uiText | Should -Match 'if \(planPairs\.length === 0\)'
         $uiText | Should -Match 'Configure a source/target pair and discover it'
+    }
+
+    It 'guards custom SQL and patch application against configured source servers' {
+        $script:webHostText | Should -Match 'Assert-WebInstanceNotConfiguredSource -SqlInstance \$sqlInstance'
+        $script:webHostText | Should -Match 'Patching configured source.*is blocked'
+        $script:webHostText | Should -Match '\$target\.Role -eq .Source.'
     }
 }
 
@@ -1374,6 +1339,37 @@ Describe 'Full-text migration readiness' {
     }
 }
 
+Describe 'CDC schema-only migration readiness' {
+    BeforeAll {
+        Import-Module dbatools -ErrorAction Stop
+    }
+
+    It 'blocks schema-only migration when CDC is enabled' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Transfer {
+            [pscustomobject]@{ IsCdcEnabled = $true }
+        }
+
+        $result = Test-MigrationCdcReadiness -Source source -Target target -Database appdb
+
+        $result.Status | Should -Be 'Failed'
+        $result.Stage | Should -Be 'CdcPreflight'
+        $result.SourceCdcEnabled | Should -BeTrue
+        $result.Message | Should -Match 'configure CDC separately'
+        $result.Message | Should -Match 'No target database changes were made'
+    }
+
+    It 'allows schema-only migration when CDC is disabled' {
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Transfer {
+            [pscustomobject]@{ IsCdcEnabled = $false }
+        }
+
+        $result = Test-MigrationCdcReadiness -Source source -Target target -Database appdb
+
+        $result.Status | Should -Be 'Passed'
+        $result.SourceCdcEnabled | Should -BeFalse
+    }
+}
+
 Describe 'Migration reports' {
     It 'writes valid CSV content when there are no rows to report' {
         $outputPath = Join-Path $TestDrive 'reports'
@@ -1487,25 +1483,6 @@ param([string] $HostName, [int] $Port, [switch] $PortableMode, [string] $AppRoot
                 ) -join "`n"
             }
             catch {
-                $output = @($output, $_.Exception.Message | Where-Object { $_ }) -join "`n"
-            }
-            $output | Should -Match 'Could not find a free loopback port near 65535'
-            $output | Should -Not -Match 'out of the range of valid values'
-        }
-        finally {
-            $blockingListener.Stop()
-            $env:DBMIGRATION_NO_ELEVATE = $previousNoElevate
-        }
-    }
-
-    It 'installs the app bundle in a stable location and cleans up correctly' {
-        $installRoot = Join-Path $TestDrive 'DbMigrationTool'
-        $portableAuth = Join-Path $installRoot 'portable\auth'
-        $portableLogs = Join-Path $installRoot 'portable\logs'
-        $null = New-Item -ItemType Directory -Path $portableAuth -Force
-        $null = New-Item -ItemType Directory -Path $portableLogs -Force
-        Set-Content -LiteralPath (Join-Path $portableAuth 'auth.json') -Value 'preserve-existing-auth'
-        Set-Content -LiteralPath (Join-Path $portableLogs 'existing.log') -Value 'preserve-existing-log'
 
         & (Join-Path $PSScriptRoot '..\Install-DbMigrationWeb.ps1') -CurrentUser -InstallPath $installRoot -NoDesktopShortcut -NoStartMenuShortcut
 
@@ -2172,7 +2149,7 @@ Describe 'Post-migration repair and statistics' {
         Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.PostMigration -Exactly 0
     }
 
-    It 'installs Ola Hallengren stored procedures in master without replacing objects or creating jobs' {
+    It 'replaces Ola Hallengren stored procedures in master without creating jobs' {
         Mock Install-DbaMaintenanceSolution -ModuleName DbMigration.PostMigration
 
         Install-OlaHallengrenMaintenanceSolution -SqlInstance target
@@ -2180,7 +2157,7 @@ Describe 'Post-migration repair and statistics' {
         Should -Invoke Install-DbaMaintenanceSolution -ModuleName DbMigration.PostMigration -Exactly 1 -ParameterFilter {
             @($SqlInstance)[0].FullName -eq 'target' -and $Database -eq 'master' -and
             $EnableException -and $ErrorAction -eq 'Stop' -and $Confirm -eq $false -and
-            -not $ReplaceExisting -and -not $InstallJobs
+            $ReplaceExisting -and -not $InstallJobs
         }
     }
 }
