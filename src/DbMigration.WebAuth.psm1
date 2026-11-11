@@ -16,6 +16,8 @@ function Get-MigrationWebDefaultBranding {
     [ordered]@{
         ProductName = 'Database Migration'
         OrganizationName = 'Vishal Pillai'
+        MaintainerName = 'Vishal Pillai'
+        RepositoryUrl = 'https://github.com/vishpillai/MSSQL-Migration-Tool'
         HeaderSubtitle = 'SQL Server management workspace'
         LoginHeadline = 'Move your data with confidence.'
         LoginDescription = 'Plan, migrate, and monitor SQL Server environments from one secure workspace.'
@@ -190,6 +192,15 @@ function Set-MigrationWebBranding {
                 throw 'AccentColor must be a six-digit CSS hex color.'
             }
         }
+        elseif ($key -eq 'RepositoryUrl') {
+            $repositoryUri = $null
+            if (-not [Uri]::TryCreate($value, [UriKind]::Absolute, [ref]$repositoryUri) -or
+                $repositoryUri.Scheme -ne 'https' -or [string]::IsNullOrWhiteSpace($repositoryUri.Host) -or
+                -not [string]::IsNullOrEmpty($repositoryUri.UserInfo)) {
+                throw 'RepositoryUrl must be an absolute HTTPS URL without embedded credentials.'
+            }
+            $value = $repositoryUri.AbsoluteUri.TrimEnd('/')
+        }
         elseif ($key -eq 'LogoDataUri') {
             if ($value -and $value -notmatch '^data:image/(png|jpeg);base64,([A-Za-z0-9+/]+={0,2})$') {
                 throw 'LogoDataUri must be an embedded PNG or JPEG image.'
@@ -215,6 +226,7 @@ function Set-MigrationWebBranding {
             $maxLength = switch ($key) {
                 'ProductName' { 64 }
                 'OrganizationName' { 100 }
+                'MaintainerName' { 100 }
                 'HeaderSubtitle' { 100 }
                 'LoginHeadline' { 120 }
                 'LoginDescription' { 240 }

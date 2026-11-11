@@ -1,5 +1,61 @@
 Set-StrictMode -Version Latest
 
+if ($IsWindows -and -not ('DbMigration.UncStorageSpace' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+namespace DbMigration {
+    public static class UncStorageSpace {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetDiskFreeSpaceEx(
+            string directoryName,
+            out ulong freeBytesAvailableToCaller,
+            out ulong totalNumberOfBytes,
+            out ulong totalNumberOfFreeBytes);
+    }
+}
+'@ -ErrorAction Stop
+}
+
+function Get-MigrationBackupPathSpace {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $Path)
+
+    if (-not $IsWindows) {
+        throw 'UNC backup-path capacity can only be checked from the Windows web host.'
+    }
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw 'BackupPath is required to check available storage.'
+    }
+
+    $normalizedPath = [System.IO.Path]::GetFullPath($Path)
+    [ulong]$availableBytes = 0
+    [ulong]$capacityBytes = 0
+    [ulong]$volumeFreeBytes = 0
+    $capacityRead = [DbMigration.UncStorageSpace]::GetDiskFreeSpaceEx(
+        $normalizedPath,
+        [ref]$availableBytes,
+        [ref]$capacityBytes,
+        [ref]$volumeFreeBytes
+    )
+    if (-not $capacityRead) {
+        $win32Error = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw [ComponentModel.Win32Exception]::new($win32Error)
+    }
+    if ($capacityBytes -eq 0) {
+        throw "Backup path '$normalizedPath' returned zero total capacity."
+    }
+
+    [pscustomobject]@{
+        Path = $normalizedPath
+        AvailableGB = [math]::Round([double]$availableBytes / 1GB, 2)
+        VolumeFreeGB = [math]::Round([double]$volumeFreeBytes / 1GB, 2)
+        CapacityGB = [math]::Round([double]$capacityBytes / 1GB, 2)
+        PercentAvailable = [math]::Round((100.0 * [double]$availableBytes / [double]$capacityBytes), 2)
+        MeasuredAs = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    }
+}
+
 function Get-MigrationVolumeDetails {
     param(
         [Parameter(Mandatory)]
@@ -414,6 +470,121 @@ function Get-MigrationCollationPrecheck {
     }
 }
 
+function Test-MigrationFullTextPairConfiguration {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Source,
+        [Parameter(Mandatory)][string] $Target,
+        [Parameter()][AllowEmptyCollection()][object[]] $Databases = @()
+    )
+
+    $targetFullTextInstalled = $null
+    $targetFullTextError = ''
+    try {
+        $targetFeatures = @(Invoke-DbaQuery -SqlInstance $Target -Database master -EnableException -ErrorAction Stop -Query @'
+SELECT CONVERT(bit, SERVERPROPERTY('IsFullTextInstalled')) AS IsFullTextInstalled;
+'@)
+        if ($targetFeatures.Count -ne 1 -or $null -eq $targetFeatures[0].IsFullTextInstalled) {
+            throw "Could not determine whether Full-Text Search is installed on '$Target'."
+        }
+        $targetFullTextInstalled = [bool]$targetFeatures[0].IsFullTextInstalled
+    }
+    catch {
+        $targetFullTextError = $_.Exception.Message
+    }
+
+    if ($Databases.Count -eq 0) {
+        [pscustomobject]@{
+            Source = $Source; Target = $Target; Endpoint = $Source; Role = 'FullText'
+            Database = ''; Status = 'Skipped'
+            Message = 'No source user databases were available for the Full-Text Search precheck.'
+        }
+        return
+    }
+
+    foreach ($database in $Databases) {
+        $databaseName = [string]$database.Name
+        try {
+            $sourceFeatures = @(Invoke-DbaQuery -SqlInstance $Source -Database $databaseName -EnableException -ErrorAction Stop -Query @'
+SELECT
+    (SELECT COUNT_BIG(*) FROM sys.fulltext_indexes) AS FullTextIndexCount,
+    (SELECT COUNT_BIG(*) FROM sys.sql_modules
+     WHERE definition LIKE N'%CONTAINS%' OR definition LIKE N'%FREETEXT%') AS FullTextPredicateModuleCount;
+'@)
+            if ($sourceFeatures.Count -ne 1) {
+                throw "Could not determine Full-Text Search requirements for '$databaseName'."
+            }
+            $indexCount = [long]$sourceFeatures[0].FullTextIndexCount
+            $moduleCount = [long]$sourceFeatures[0].FullTextPredicateModuleCount
+            $requiresFullText = $indexCount -gt 0 -or $moduleCount -gt 0
+            if (-not $requiresFullText) {
+                [pscustomobject]@{
+                    Source = $Source; Target = $Target; Endpoint = $databaseName; Role = 'FullText'
+                    Database = $databaseName; Status = 'Passed'
+                    FullTextIndexCount = $indexCount; FullTextPredicateModuleCount = $moduleCount
+                    TargetFullTextInstalled = $targetFullTextInstalled
+                    Message = 'No full-text indexes or full-text predicate references were found in this database.'
+                }
+                continue
+            }
+
+            if ($targetFullTextInstalled -eq $true) {
+                [pscustomobject]@{
+                    Source = $Source; Target = $Target; Endpoint = $databaseName; Role = 'FullText'
+                    Database = $databaseName; Status = 'Passed'
+                    FullTextIndexCount = $indexCount; FullTextPredicateModuleCount = $moduleCount
+                    TargetFullTextInstalled = $true
+                    Message = "Source database uses full-text search ($indexCount index(es), $moduleCount candidate module(s)); target Full-Text Search is installed."
+                }
+                continue
+            }
+
+            $candidateModules = @()
+            $candidateModuleError = ''
+            if ($moduleCount -gt 0) {
+                try {
+                    $candidateModules = @(Invoke-DbaQuery -SqlInstance $Source -Database $databaseName -EnableException -ErrorAction Stop -Query @'
+SELECT TOP (20)
+    QUOTENAME(OBJECT_SCHEMA_NAME(object_id)) + N'.' + QUOTENAME(OBJECT_NAME(object_id)) AS ModuleName
+FROM sys.sql_modules
+WHERE definition LIKE N'%CONTAINS%' OR definition LIKE N'%FREETEXT%'
+ORDER BY ModuleName;
+'@ | ForEach-Object { [string]$_.ModuleName })
+                }
+                catch {
+                    $candidateModuleError = $_.Exception.Message
+                }
+            }
+            $featureMessage = if ($targetFullTextError) {
+                "Target Full-Text Search could not be verified: $targetFullTextError"
+            } else {
+                "Target Full-Text Search is not installed on '$Target'."
+            }
+            $moduleMessage = if ($candidateModules.Count -gt 0) {
+                " Candidate module names: $($candidateModules -join ', '). These are lexical matches and may include comments or string literals."
+            } elseif ($candidateModuleError) {
+                " Candidate module names could not be read: $candidateModuleError"
+            } else { '' }
+            [pscustomobject]@{
+                Source = $Source; Target = $Target; Endpoint = $databaseName; Role = 'FullText'
+                Database = $databaseName; Status = 'Warning'
+                FullTextIndexCount = $indexCount; FullTextPredicateModuleCount = $moduleCount
+                TargetFullTextInstalled = $targetFullTextInstalled
+                Message = "Source database uses full-text search ($indexCount index(es), $moduleCount dependent module(s)). $featureMessage$moduleMessage Migration readiness will check this again and block transfer if the dependency remains unresolved."
+            }
+        }
+        catch {
+            [pscustomobject]@{
+                Source = $Source; Target = $Target; Endpoint = $databaseName; Role = 'FullText'
+                Database = $databaseName; Status = 'Warning'
+                FullTextIndexCount = $null; FullTextPredicateModuleCount = $null
+                TargetFullTextInstalled = $targetFullTextInstalled
+                Message = "Full-Text Search precheck could not be completed for '$databaseName': $($_.Exception.Message)"
+            }
+        }
+    }
+}
+
 function Test-MigrationConfiguration {
     [CmdletBinding()]
     param(
@@ -502,6 +673,8 @@ function Test-MigrationConfiguration {
                 if ($targetTempdb.Count -ne 1) { throw "Could not read tempdb collation on '$($pair.Target)'." }
                 Get-MigrationCollationPrecheck -Source $pair.Source -Target $pair.Target `
                     -SourceDatabases $sourceDatabases -TargetTempdbCollation ([string]$targetTempdb[0].Collation)
+                Test-MigrationFullTextPairConfiguration -Source $pair.Source -Target $pair.Target `
+                    -Databases $sourceDatabases
             }
             catch {
                 [pscustomobject]@{
@@ -558,6 +731,36 @@ function Test-MigrationConfiguration {
                 SqlVersionMajor = $null
                 Status = 'Failed'
                 Message = $_.Exception.Message
+            }
+        }
+        try {
+            $backupPathSpace = Get-MigrationBackupPathSpace -Path $pair.BackupPath
+            $capacityStatus = if ($backupPathSpace.AvailableGB -gt 0) { 'Passed' } else { 'Warning' }
+            [pscustomobject]@{
+                Source = $pair.Source
+                Target = $pair.Target
+                Endpoint = $pair.BackupPath
+                Role = 'BackupPathCapacity'
+                Status = $capacityStatus
+                AvailableGB = $backupPathSpace.AvailableGB
+                VolumeFreeGB = $backupPathSpace.VolumeFreeGB
+                CapacityGB = $backupPathSpace.CapacityGB
+                MeasuredAs = $backupPathSpace.MeasuredAs
+                Message = "UNC share reports $($backupPathSpace.AvailableGB) GB available to validation identity '$($backupPathSpace.MeasuredAs)' ($($backupPathSpace.VolumeFreeGB) GB volume free of $($backupPathSpace.CapacityGB) GB total). This is a snapshot, not a guarantee of backup capacity; SQL Server service access is checked separately."
+            }
+        }
+        catch {
+            [pscustomobject]@{
+                Source = $pair.Source
+                Target = $pair.Target
+                Endpoint = $pair.BackupPath
+                Role = 'BackupPathCapacity'
+                Status = 'Warning'
+                AvailableGB = $null
+                VolumeFreeGB = $null
+                CapacityGB = $null
+                MeasuredAs = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+                Message = "Could not read UNC capacity using validation identity '$([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)'; SQL Server service visibility was checked separately. $($_.Exception.Message)"
             }
         }
     }
@@ -1020,4 +1223,4 @@ ORDER BY ModuleName;
     }
 }
 
-Export-ModuleMember -Function Get-MigrationDiscovery, Get-MigrationServerObjectCounts, Test-MigrationRestoreCapacity, Test-MigrationTdeReadiness, Get-MigrationCollationPrecheck, Test-MigrationConfiguration, Get-MigrationReadinessAssessment
+Export-ModuleMember -Function Get-MigrationDiscovery, Get-MigrationServerObjectCounts, Test-MigrationRestoreCapacity, Test-MigrationTdeReadiness, Get-MigrationCollationPrecheck, Get-MigrationBackupPathSpace, Test-MigrationFullTextPairConfiguration, Test-MigrationConfiguration, Get-MigrationReadinessAssessment

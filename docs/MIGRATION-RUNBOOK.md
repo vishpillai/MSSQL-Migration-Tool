@@ -11,7 +11,7 @@ Operational runbook for executing one migration wave with this tool. It is writt
 - The tool never modifies source databases: it reads metadata and takes a native `COPY_ONLY` backup. Restores, user repair, statistics updates, and server-object copies happen only on the target.
 - A database is marked complete only when it is verified online and accessible on the target, post-migration actions succeeded, and its temporary backup folder was cleaned up.
 - Runs are resumable: `MigrationState.json` records per-database status. A database recorded `Completed` and still online on the target is skipped on retry; failed work stays eligible for retry.
-- Backups are checksummed, compressed, verified, and striped across `BackupFileCount` files in a unique per-run folder under the pair's `BackupPath`. The run folder is deleted only when every stage succeeds; on failure it is retained for troubleshooting/retry.
+- Backups are checksummed, compressed, verified, and striped across `BackupFileCount` files in a unique per-run folder under the pair's `BackupPath`. Tool-generated per-run folders are deleted after the pair finishes, including failed attempts; failed retries create fresh backups. Cleanup is restricted to validated per-run folders; cleanup failures are reported.
 - Copied SQL Agent jobs are **disabled** on the target until an administrator reviews and enables them.
 - Linked-server configuration is **opt-in** and skipped by default; existing same-name linked servers on the target are left unchanged, not overwritten.
 - Keep `AllowTargetReplace` at `false`; approve overwrites individually in the GUI/web UI.
@@ -178,7 +178,7 @@ Trigger: any rollback criterion from the change record (e.g., smoke-test failure
 | Login works on source but not target | Orphaned users — check `Get-DbaDbOrphanUser`; confirm `ServerObjects` stage completed |
 | Linked server fails on target | New endpoint reachable from target host (firewall); remote password env variable set in the runner's session; per-login mappings recreated (tool creates one mapping per linked server); same-name linked server already on target is left unchanged |
 | Agent jobs not running | They are copied **disabled** by design — review and enable |
-| Need to retry | Fix the cause and rerun `-Mode Migrate`; state file skips completed databases, retained run folders are reused/cleaned after successful retry |
+| Need to retry | Fix the cause and rerun `-Mode Migrate`; state file skips completed databases, and failed work creates fresh temporary backups because failed-run folders are removed |
 | Audit/integrity error (web) | Do not edit `Audit.jsonl*`; use the password-confirmed administrator reset only when authorized |
 
 Full troubleshooting list: [HOW-TO-USE.md](../HOW-TO-USE.md) section 11.

@@ -226,7 +226,7 @@ function Save-MigrationSqlServerPatch {
     $null = Get-DbaKbUpdate -Name "KB$KB" -Simple -EnableException -ErrorAction Stop
     $fullPath = [System.IO.Path]::GetFullPath($Path)
     $null = New-Item -ItemType Directory -Path $fullPath -Force -ErrorAction Stop
-    Save-DbaKbUpdate -Name "KB$KB" -Path $fullPath -Architecture x64 -ErrorAction Stop | Out-Null
+    Save-DbaKbUpdate -Name "KB$KB" -Path $fullPath -Architecture x64 -UseWebRequest -ErrorAction Stop | Out-Null
     $package = Get-ChildItem -LiteralPath $fullPath -File -Recurse -ErrorAction Stop |
         Where-Object { $_.Name -match "(?i)KB$KB" } | Select-Object -First 1
     if (-not $package) {

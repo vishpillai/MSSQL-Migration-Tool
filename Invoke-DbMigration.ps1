@@ -569,6 +569,26 @@ foreach ($pair in $configuration.SourceTargets) {
             }
         }
     }
+    else {
+        $failedRunCleanupResults = @(Remove-MigrationPairRunBackupDirectories `
+            -RootDirectory $backupRoot `
+            -Directories (@($runBackupDirectory) + @($previousBackupDirectories)) `
+            -Source $pair.Source -Target $pair.Target -StatePath $StatePath `
+            -Databases @($databases | ForEach-Object { [string]$_.Name }) `
+            -FailureMessage ([string]$pairFailures[0].Message))
+        foreach ($cleanupResult in $failedRunCleanupResults) {
+            $migrationResults.Add([pscustomobject]@{
+                Source = $pair.Source; Target = $pair.Target; Database = '*'; Stage = 'BackupCleanup'
+                Status = [string]$cleanupResult.Status; BackupPath = [string]$cleanupResult.Directory
+                Message = [string]$cleanupResult.Message
+            })
+            if ($ProgressPath) {
+                Write-MigrationProgressEvent -ProgressPath $ProgressPath -Source $pair.Source -Target $pair.Target `
+                    -Database '*' -Stage 'BackupCleanup' -Status ([string]$cleanupResult.Status) `
+                    -Message ([string]$cleanupResult.Message)
+            }
+        }
+    }
 }
 
 $null = Write-MigrationReports -Rows @($migrationResults) -OutputPath $OutputPath -Name 'Migration'

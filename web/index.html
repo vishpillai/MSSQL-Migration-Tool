@@ -799,6 +799,7 @@
       overflow: auto;
     }
     body.application-active > footer {
+      display: flex;
       grid-column: 2;
       grid-row: 2;
       padding: 10px clamp(18px, 2.4vw, 36px);
@@ -1087,6 +1088,10 @@
             <label for="brand-login-headline" style="margin-top:12px">Login headline</label><input id="brand-login-headline" type="text" maxlength="120" required>
             <label for="brand-login-description" style="margin-top:12px">Login description</label><input id="brand-login-description" type="text" maxlength="240" required>
             <div class="row" style="margin-top:12px">
+              <div class="grow"><label for="brand-maintainer-name">Developed and maintained by</label><input id="brand-maintainer-name" type="text" maxlength="100" required></div>
+              <div class="grow"><label for="brand-repository-url">Git repository URL (HTTPS)</label><input id="brand-repository-url" type="text" inputmode="url" autocomplete="url" maxlength="500" required></div>
+            </div>
+            <div class="row" style="margin-top:12px">
               <div class="grow"><label for="brand-theme">Theme</label><select id="brand-theme"><option>Light</option><option>Dark</option><option>Blue</option></select></div>
               <div class="grow"><label for="brand-accent-color">Accent color</label><input id="brand-accent-color" type="color" value="#1769aa"></div>
               <div class="grow"><label for="brand-logo-file">Logo (PNG or JPEG, max 256 KiB)</label><input id="brand-logo-file" type="file" accept="image/png,image/jpeg"></div>
@@ -1273,7 +1278,7 @@
         <details id="patch-panel" class="patch-panel" open>
           <summary>Patch selected SQL instances</summary>
           <div class="patch-content">
-            <p class="muted">Refresh Microsoft’s SQL build catalog, assess compatibility and installed build state, then download and apply a selected KB. Catalog refresh and package download need internet access; assessment and installation use the local SQL environment. The repository must be accessible to the app host and target server.</p>
+            <p class="muted">Select multiple instances from the same SQL Server version and servicing branch for a batch (for example, SQL Server 2022 RTM). One KB is assessed across the selection and applied sequentially only to eligible instances; mismatched instances are not patched. Refresh Microsoft’s SQL build catalog, assess compatibility and installed build state, then download and apply the selected KB. Catalog refresh and package download need internet access; assessment and installation use the local SQL environment. The repository must be accessible to the app host and target server.</p>
             <div id="patch-targets"></div>
             <div class="patch-actions">
               <button id="check-patch-levels" class="secondary" type="button">Check patch levels</button>
@@ -1393,7 +1398,7 @@
 
       <section id="live-server-monitor-workspace" class="card" data-feature="LiveMonitor">
         <h2>Live server monitor</h2>
-        <p class="muted">Monitor SQL health using transient 15-second snapshots. CPU, memory, disk capacity, and storage latency are graphed with rolling in-memory trends and threshold alerts; active requests and blocking are shown separately. Nothing from these snapshots is written to application logs, audit logs, or disk.</p>
+        <p class="muted">Monitor SQL health using transient snapshots: every 5 seconds while this page is visible and every 15 seconds in the background. CPU, memory, disk capacity, and storage latency are graphed with rolling in-memory trends and threshold alerts; active requests and blocking are shown separately. Nothing from these snapshots is written to application logs, audit logs, or disk.</p>
         <p class="muted">When a migration starts, its source and target instances are selected and monitored automatically. The web host identity needs SQL connectivity and server-state permission (VIEW SERVER STATE; SQL Server 2022+ may require VIEW SERVER PERFORMANCE STATE).</p>
         <div class="row live-monitor-add-row">
           <div class="grow">
@@ -1441,7 +1446,7 @@
       </div>
     </form>
   </dialog>
-  <footer><span id="brand-footer-organization">© 2026 Vishal Pillai</span><span id="brand-footer-product">SQL Server Migration Tool</span></footer>
+  <footer><span id="brand-footer-organization">© 2026 Vishal Pillai</span><span id="brand-footer-product">SQL Server Migration Tool</span><span id="brand-footer-version">Version unavailable</span><span id="brand-footer-credit">Developed and maintained by Vishal Pillai</span><a id="brand-footer-repository" href="https://github.com/vishpillai/MSSQL-Migration-Tool" target="_blank" rel="noopener noreferrer">https://github.com/vishpillai/MSSQL-Migration-Tool</a></footer>
   <datalist id="history-servers"></datalist>
   <datalist id="history-paths"></datalist>
   <script>
@@ -1454,6 +1459,8 @@
     const legacySavedPasswordKey = "dbMigrationSavedPassword.v1";
     let currentSession = null;
     let currentBranding = null;
+    let applicationVersion = "";
+    let applicationCommit = "";
 
     function loadHistory() {
       try {
@@ -1540,6 +1547,8 @@
     let activeDatabaseKey = null;
     let currentStagePercent = null;
     let liveMonitorTimer = null;
+    const liveMonitorVisibleIntervalMs = 5000;
+    const liveMonitorBackgroundIntervalMs = 15000;
     let liveMonitorInProgress = false;
     let liveMonitorAbortController = null;
     let liveMonitorGeneration = 0;
@@ -1659,6 +1668,20 @@
       $("brand-login-description").textContent = branding.LoginDescription;
       $("brand-footer-organization").textContent = `© ${new Date().getFullYear()} ${branding.OrganizationName}`;
       $("brand-footer-product").textContent = branding.ProductName;
+      const maintainerName = String(branding.MaintainerName || "").trim();
+      $("brand-footer-credit").textContent = maintainerName ? `Developed and maintained by ${maintainerName}` : "";
+      $("brand-footer-credit").classList.toggle("hidden", !maintainerName);
+      const repositoryLink = $("brand-footer-repository");
+      let repositoryUrl = "";
+      try {
+        const parsedRepositoryUrl = new URL(String(branding.RepositoryUrl || ""));
+        if (parsedRepositoryUrl.protocol === "https:" && !parsedRepositoryUrl.username && !parsedRepositoryUrl.password) {
+          repositoryUrl = parsedRepositoryUrl.href;
+        }
+      } catch (_) {}
+      repositoryLink.href = repositoryUrl || "#";
+      repositoryLink.textContent = repositoryUrl;
+      repositoryLink.classList.toggle("hidden", !repositoryUrl);
       document.title = branding.ProductName;
       document.documentElement.dataset.theme = branding.Theme || "Light";
       const accent = /^#[0-9a-f]{6}$/i.test(branding.AccentColor || "") ? branding.AccentColor : "#1769aa";
@@ -1798,6 +1821,8 @@
     function fillBrandingForm(branding) {
       $("brand-product-name").value = branding.ProductName || "";
       $("brand-organization-name").value = branding.OrganizationName || "";
+      $("brand-maintainer-name").value = branding.MaintainerName || "";
+      $("brand-repository-url").value = branding.RepositoryUrl || "";
       $("brand-header-subtitle").value = branding.HeaderSubtitle || "";
       $("brand-login-headline").value = branding.LoginHeadline || "";
       $("brand-login-description").value = branding.LoginDescription || "";
@@ -1882,6 +1907,8 @@
         await saveBranding({
           ProductName: $("brand-product-name").value,
           OrganizationName: $("brand-organization-name").value,
+          MaintainerName: $("brand-maintainer-name").value,
+          RepositoryUrl: $("brand-repository-url").value,
           HeaderSubtitle: $("brand-header-subtitle").value,
           LoginHeadline: $("brand-login-headline").value,
           LoginDescription: $("brand-login-description").value,
@@ -2416,6 +2443,15 @@
       const windowsAuth = authMode === "Windows";
       if (authenticated !== applicationAuthenticated) resetTransientSessionUi();
       applicationAuthenticated = authenticated;
+      const buildId = String(session?.buildId || "");
+      if (buildId) {
+        const [version, commit] = buildId.split(":");
+        applicationVersion = version || "";
+        applicationCommit = commit || "";
+      }
+      const versionLabel = applicationVersion ? `Version ${applicationVersion}` : "Version unavailable";
+      const commitLabel = applicationCommit ? ` · Git ${applicationCommit.slice(0, 7)}` : "";
+      $("brand-footer-version").textContent = `${versionLabel}${commitLabel}`;
       document.body.classList.toggle("application-active", authenticated);
       configureSessionAccess(authenticated ? { ...(session || {}), authMode, username } : null);
       $("login-card").classList.toggle("hidden", authenticated || windowsAuth);
@@ -3683,9 +3719,7 @@
       $("live-monitor-start").disabled = true;
       $("live-monitor-status").textContent = `Checking ${instances.length} SQL instance(s)…`;
       try {
-        const response = await api("/api/live-monitor", {
-          SqlInstances: instances
-        }, controller.signal);
+        const response = await api("/api/live-monitor", { SqlInstances: instances }, controller.signal);
         if (generation !== liveMonitorGeneration) return;
         renderLiveMonitorResults(response.results);
         $("live-monitor-status").textContent =
@@ -3705,18 +3739,42 @@
       }
     }
 
+    function getLiveMonitorRefreshIntervalMs() {
+      return document.hidden ? liveMonitorBackgroundIntervalMs : liveMonitorVisibleIntervalMs;
+    }
+
+    function scheduleLiveMonitorRefresh() {
+      if (liveMonitorTimer !== null) clearInterval(liveMonitorTimer);
+      const intervalMs = getLiveMonitorRefreshIntervalMs();
+      liveMonitorTimer = setInterval(() => { void refreshLiveMonitor(); }, intervalMs);
+      return intervalMs;
+    }
+
+    function describeLiveMonitorCadence() {
+      return document.hidden ? "15 seconds in the background" : "5 seconds while visible";
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (liveMonitorTimer === null) return;
+      scheduleLiveMonitorRefresh();
+      if (!liveMonitorInProgress) {
+        const activity = liveMonitorStartedByMigration ? "Migration source and target monitoring is active" : "Monitoring is active";
+        $("live-monitor-status").textContent = `${activity} · refreshing every ${describeLiveMonitorCadence()}.`;
+      }
+    });
+
     function startLiveMonitor(startedByMigration = false) {
       if (liveMonitorTimer !== null || !getSelectedLiveMonitorInstances().length) return;
       liveMonitorStartedByMigration = startedByMigration;
       for (const instance of getSelectedLiveMonitorInstances()) {
         liveMonitorDiskCounters.delete(instance.toLowerCase());
       }
-      liveMonitorTimer = setInterval(() => { void refreshLiveMonitor(); }, 15000);
+      scheduleLiveMonitorRefresh();
       $("live-monitor-start").disabled = true;
       $("live-monitor-stop").disabled = false;
       $("live-monitor-status").textContent = startedByMigration
-        ? "Migration source and target monitoring is active · refreshing every 15 seconds."
-        : "Monitoring is active · refreshing every 15 seconds.";
+        ? `Migration source and target monitoring is active · refreshing every ${describeLiveMonitorCadence()}.`
+        : `Monitoring is active · refreshing every ${describeLiveMonitorCadence()}.`;
       void refreshLiveMonitor();
     }
 
@@ -4001,7 +4059,30 @@
       downloadReportingFile(`offline-migration-plan-${timestamp}.json`, JSON.stringify(plan, null, 2), "application/json;charset=utf-8");
     }
 
+    function sanitizeReadinessFilenamePart(value) {
+      return String(value ?? "unknown").trim()
+        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+        .replace(/\s+/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^\.+|\.+$/g, "")
+        .slice(0, 32) || "unknown";
+    }
+
+    function buildReadinessFilename(report, pair, extension, timestamp) {
+      const source = sanitizeReadinessFilenamePart(report.source || pair.Source);
+      const target = sanitizeReadinessFilenamePart(report.target || pair.Target);
+      const databases = [...new Set((report.assessments || [])
+        .map((assessment) => assessment.Database)
+        .filter(Boolean))];
+      const databaseNames = databases.length > 2
+        ? `${databases.slice(0, 2).map(sanitizeReadinessFilenamePart).join("_")}_plus_${databases.length - 2}_more`
+        : databases.map(sanitizeReadinessFilenamePart).join("_") || "none";
+      const migrationMode = (pair.MigrationMode || report.migrationMode) === "SchemaOnly" ? "schema-only" : "full-db";
+      return `${source}-to-${target}-db-${databaseNames}-${migrationMode}-${timestamp}.${extension}`;
+    }
+
     function downloadReadinessReport(report, format, pairIndex) {
+      const pair = pairs[pairIndex] || {};
       const rows = getReadinessReportRows(report);
       const timestamp = new Date(report.assessedAt || Date.now()).toISOString().replace(/[:.]/g, "-");
       const safeCell = (value) => {
@@ -4012,7 +4093,6 @@
       let contentType;
       let extension;
       if (format === "json") {
-        const pair = pairs[pairIndex] || {};
         content = JSON.stringify({
           ...report,
           offlinePlan: buildOfflineMigrationPlan(report, pair.MigrationMode || report.migrationMode, pair.SkipUsersWithoutTargetLogins === true)
@@ -4035,7 +4115,7 @@
         contentType = "text/html;charset=utf-8";
         extension = "html";
       }
-      downloadReportingFile(`migration-readiness-${timestamp}.${extension}`, content, contentType);
+      downloadReportingFile(buildReadinessFilename(report, pair, extension, timestamp), content, contentType);
     }
 
     async function assessPairReadiness(index) {

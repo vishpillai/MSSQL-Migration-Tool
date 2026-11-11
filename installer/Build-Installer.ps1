@@ -8,6 +8,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Path $PSScriptRoot -Parent
+$versionPath = Join-Path $repoRoot 'VERSION'
+if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) {
+    throw 'VERSION file is required to build the installer.'
+}
+$appVersion = (Get-Content -LiteralPath $versionPath -Raw -ErrorAction Stop).Trim()
+if ($appVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw 'VERSION must be numeric major.minor.patch for installer builds.'
+}
+$installerVersion = "$appVersion.0"
 $stagingRoot = Join-Path $PSScriptRoot 'obj\staging'
 
 if (Test-Path -LiteralPath $stagingRoot) {
@@ -17,6 +26,7 @@ $appRoot = Join-Path $stagingRoot 'App'
 $null = New-Item -ItemType Directory -Path $appRoot -Force -ErrorAction Stop
 
 $runtimeFiles = @(
+    'VERSION',
     'Initialize-DbMigrationWebAuth.ps1',
     'Invoke-DbMigration.ps1',
     'Invoke-DbMigrationGui.ps1',
@@ -95,7 +105,7 @@ if ($StageOnly) {
 $manifest = [System.Collections.Generic.List[string]]::new()
 $manifest.Add('<?xml version="1.0" encoding="utf-8"?>')
 $manifest.Add('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
-$manifest.Add('  <Package Name="Db Migration Tool" Manufacturer="Vishal Pillai" Version="1.0.0.0" UpgradeCode="5D339A8D-CA1E-45D4-A266-4F0812FE5981" Language="1033" Scope="perUser">')
+$manifest.Add('  <Package Name="Db Migration Tool" Manufacturer="Vishal Pillai" Version="' + $installerVersion + '" UpgradeCode="5D339A8D-CA1E-45D4-A266-4F0812FE5981" Language="1033" Scope="perUser">')
 $manifest.Add('    <MediaTemplate CompressionLevel="high" />')
 $manifest.Add('    <Feature Id="MainFeature" Title="Db Migration Tool" Level="1">')
 $manifest.Add('      <ComponentGroupRef Id="AppFiles" />')
@@ -235,7 +245,7 @@ if (Test-Path -LiteralPath $legacyAppFilesPath) {
 }
 
 $projectPath = Join-Path $PSScriptRoot 'DbMigrationTool.Installer.wixproj'
-& dotnet build $projectPath -c $Configuration --nologo
+& dotnet build $projectPath -c $Configuration --nologo "-p:Version=$installerVersion"
 if ($LASTEXITCODE -ne 0) {
     throw 'WiX build failed.'
 }

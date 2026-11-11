@@ -252,15 +252,23 @@ Describe 'Migration web authentication' {
             Theme = 'Dark'
             AccentColor = '#123abc'
             ProductName = 'Client Migration'
+            MaintainerName = 'Vishal Pillai'
+            RepositoryUrl = 'https://github.com/vishpillai/MSSQL-Migration-Tool/'
         }
 
         $updated.Theme | Should -Be 'Dark'
         $updated.AccentColor | Should -Be '#123abc'
         $updated.ProductName | Should -Be 'Client Migration'
+        $updated.MaintainerName | Should -Be 'Vishal Pillai'
+        $updated.RepositoryUrl | Should -Be 'https://github.com/vishpillai/MSSQL-Migration-Tool'
+        $branding.MaintainerName | Should -Be 'Vishal Pillai'
+        $branding.RepositoryUrl | Should -Be 'https://github.com/vishpillai/MSSQL-Migration-Tool'
         { Set-MigrationWebBranding -Branding $branding -Updates @{ Theme = 'Solarized' } } |
             Should -Throw '*Theme must be Light, Dark, or Blue*'
         { Set-MigrationWebBranding -Branding $branding -Updates @{ AccentColor = 'red' } } |
             Should -Throw '*six-digit CSS hex color*'
+        { Set-MigrationWebBranding -Branding $branding -Updates @{ RepositoryUrl = 'javascript:alert(1)' } } |
+            Should -Throw '*absolute HTTPS URL*'
     }
 }
 
@@ -880,6 +888,19 @@ Describe 'Web patch target resolution' {
         $targets[0].SqlInstance | Should -Be 'source'
     }
 
+    It 'preserves multiple same-version selections for one patch batch' {
+        $targets = @(ConvertTo-WebPatchTargets -Selections @(
+            @{ PairIndex = 0; Role = 'Target'; SqlInstance = 'us8-sql2022-a' },
+            @{ PairIndex = 0; Role = 'Target'; SqlInstance = 'us8-sql2022-b' }
+        ))
+
+        @($targets).Count | Should -Be 2
+        @($targets | ForEach-Object SqlInstance) | Should -Contain 'us8-sql2022-a'
+        @($targets | ForEach-Object SqlInstance) | Should -Contain 'us8-sql2022-b'
+        $patchRunner = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Invoke-DbMigrationPatch.ps1') -Raw
+        $patchRunner | Should -Match 'foreach \(\$target in \$plan\.Targets\)'
+    }
+
     It 'blocks operations against any instance on a configured source host' {
         { Assert-WebInstanceNotConfiguredSource -SqlInstance 'SOURCE-SQL\NODE2' } |
             Should -Throw '*must remain unchanged*'
@@ -997,6 +1018,14 @@ Describe 'Offline migration advisor' {
         $webHostText | Should -Match 'ReadinessWarningsApproved'
         $webHostText | Should -Match 'Get-MigrationReadinessAssessment'
         $webHostText | Should -Match 'Warnings require explicit approval'
+    }
+
+    It 'names readiness report downloads with source target databases and migration mode' {
+        $uiText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\web\index.html') -Raw
+        $uiText | Should -Match 'function sanitizeReadinessFilenamePart'
+        $uiText | Should -Match 'function buildReadinessFilename'
+        $uiText | Should -Match 'const migrationMode = .*schema-only.*full-db'
+        $uiText | Should -Match '\$\{source\}-to-\$\{target\}-db-\$\{databaseNames\}-\$\{migrationMode\}-\$\{timestamp\}\.\$\{extension\}'
     }
 }
 
@@ -1330,7 +1359,7 @@ Describe 'SQL Server patch helper' {
         $download.KB | Should -Be '5104824'
         $download.Path | Should -Exist
         Should -Invoke Save-DbaKbUpdate -ModuleName DbMigration.Patching -Times 1 -Exactly -ParameterFilter {
-            $Name -eq 'KB5104824' -and $Path -contains $repository -and $Architecture -eq 'x64'
+            $Name -eq 'KB5104824' -and $Path -contains $repository -and $Architecture -eq 'x64' -and $UseWebRequest
         }
     }
 
@@ -1430,6 +1459,43 @@ Describe 'Migration state' {
         Test-Path -LiteralPath $runDirectory | Should -BeFalse
         Test-Path -LiteralPath $unrelatedDirectory | Should -BeTrue
         { Remove-MigrationRunBackupDirectory -RootDirectory $root -Directory $root -Source source -Target target } | Should -Throw '*Refusing to remove backup path*'
+    }
+
+    It 'deletes failed-run backup folders and clears only their state paths' {
+        $root = Join-Path $TestDrive 'failed-run-backups'
+        $statePath = Join-Path $TestDrive 'failed-run-state.json'
+        $null = New-Item -ItemType Directory -Path $root -Force
+        $failedRun = Get-MigrationRunBackupDirectory -RootDirectory $root -Source source -Target target -RunId ([guid]::NewGuid())
+        $completedRun = Get-MigrationRunBackupDirectory -RootDirectory $root -Source source -Target target -RunId ([guid]::NewGuid())
+        $failedDatabasePath = Get-MigrationDatabaseBackupDirectory -RunDirectory $failedRun -Source source -Target target -Database appdb
+        $completedDatabasePath = Get-MigrationDatabaseBackupDirectory -RunDirectory $completedRun -Source source -Target target -Database gooddb
+        $null = New-Item -ItemType Directory -Path $failedDatabasePath, $completedDatabasePath -Force
+        Set-Content -LiteralPath (Join-Path $failedDatabasePath 'appdb-1-of-1.bak') -Value 'failed backup'
+        Set-Content -LiteralPath (Join-Path $completedDatabasePath 'gooddb-1-of-1.bak') -Value 'completed backup'
+        $unrelatedDirectory = Join-Path $root 'keep'
+        $null = New-Item -ItemType Directory -Path $unrelatedDirectory
+        Set-MigrationState -Path $statePath -Source source -Target target -Database appdb `
+            -Status BackupCompleted -BackupPath $failedDatabasePath -ErrorMessage 'Migration preflight failed.'
+        Set-MigrationState -Path $statePath -Source source -Target target -Database gooddb `
+            -Status Completed -BackupPath $completedDatabasePath
+
+        $cleanup = @(Remove-MigrationPairRunBackupDirectories -RootDirectory $root -Directories @($failedRun, $completedRun) `
+            -Source source -Target target -StatePath $statePath -Databases @('appdb', 'gooddb') `
+            -FailureMessage 'Migration preflight failed.')
+
+        $cleanup.Count | Should -Be 2
+        @($cleanup | Where-Object Status -ne 'Completed').Count | Should -Be 0
+        Test-Path -LiteralPath $failedRun | Should -BeFalse
+        Test-Path -LiteralPath $completedRun | Should -BeFalse
+        Test-Path -LiteralPath $unrelatedDirectory | Should -BeTrue
+        $state = Get-MigrationState -Path $statePath
+        $failedKey = Get-MigrationStateKey -Source source -Target target -Database appdb
+        $completedKey = Get-MigrationStateKey -Source source -Target target -Database gooddb
+        $state.Databases[$failedKey].Status | Should -Be 'Failed'
+        $state.Databases[$failedKey].BackupPath | Should -Be ''
+        $state.Databases[$failedKey].Error | Should -Be 'Migration preflight failed.'
+        $state.Databases[$completedKey].Status | Should -Be 'Completed'
+        $state.Databases[$completedKey].BackupPath | Should -Be ''
     }
 }
 
@@ -1828,6 +1894,9 @@ param([string] $HostName, [int] $Port, [switch] $PortableMode, [string] $AppRoot
         Test-Path -LiteralPath (Join-Path $installRoot 'src\DbMigration.Patching.psm1') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'appinfo.json') | Should -BeTrue
         (Get-Content -LiteralPath (Join-Path $installRoot 'appinfo.json') -Raw) | Should -Not -Match 'DefaultPassword|MigrationAdmin123'
+        (Get-Content -LiteralPath (Join-Path $installRoot 'appinfo.json') -Raw | ConvertFrom-Json).Version |
+            Should -Be ((Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\VERSION') -Raw).Trim())
+        Test-Path -LiteralPath (Join-Path $installRoot 'VERSION') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'portable\auth') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $installRoot 'portable\logs') | Should -BeTrue
         (Get-Content -LiteralPath (Join-Path $installRoot 'portable\auth\auth.json') -Raw).TrimEnd() | Should -Be 'preserve-existing-auth'
@@ -1847,6 +1916,14 @@ param([string] $HostName, [int] $Port, [switch] $PortableMode, [string] $AppRoot
         Test-Path -LiteralPath (Join-Path $installRoot 'portable\auth\auth.json') | Should -BeFalse
 
         & (Join-Path $PSScriptRoot '..\Uninstall-DbMigrationWeb.ps1') -InstallPath $installRoot
+    }
+
+    It 'uses the repository version for portable and MSI staging' {
+        $builder = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\installer\Build-Installer.ps1') -Raw
+        $builder | Should -Match "'VERSION'"
+        $builder | Should -Match '\$installerVersion = "\$appVersion\.0"'
+        $builder | Should -Match 'Version="\x27 \+ \$installerVersion \+ \x27"'
+        $builder | Should -Match '"-p:Version=\$installerVersion"'
     }
 }
 
@@ -1880,6 +1957,22 @@ Describe 'Pair endpoint validation' {
             [pscustomobject]@{ SqlInstance = $SqlInstance; VersionMajor = $majorVersion }
         }
         Mock Test-DbaPath -ModuleName DbMigration.Discovery { $true }
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Discovery {
+            if ($Query -match 'SERVERPROPERTY') {
+                [pscustomobject]@{ IsFullTextInstalled = $true }
+            } else {
+                [pscustomobject]@{ FullTextIndexCount = 0; FullTextPredicateModuleCount = 0 }
+            }
+        }
+        Mock Get-MigrationBackupPathSpace -ModuleName DbMigration.Discovery {
+            [pscustomobject]@{
+                AvailableGB = 900
+                VolumeFreeGB = 950
+                CapacityGB = 1000
+                PercentAvailable = 90
+                MeasuredAs = 'CONTOSO\migration-host'
+            }
+        }
         Mock Get-DbaDatabase -ModuleName DbMigration.Discovery {
             if ($Database -eq 'tempdb') {
                 [pscustomobject]@{ Name = 'tempdb'; Collation = 'SQL_Latin1_General_CP1_CI_AS' }
@@ -1900,6 +1993,10 @@ Describe 'Pair endpoint validation' {
 
         @($results | Where-Object { $_.Role -in @('Source', 'Target') -and $_.Status -eq 'Passed' }).Count | Should -Be 2
         @($results | Where-Object { $_.Role -eq 'BackupPath' -and $_.Status -eq 'Passed' }).Count | Should -Be 1
+        $capacityResult = $results | Where-Object Role -eq 'BackupPathCapacity'
+        $capacityResult.Status | Should -Be 'Passed'
+        $capacityResult.AvailableGB | Should -Be 900
+        $capacityResult.MeasuredAs | Should -Be 'CONTOSO\migration-host'
         @($results | Where-Object { $_.Role -eq 'Collation' -and $_.Status -eq 'Warning' }).Count | Should -Be 1
         $script:validatedSqlInstances | Should -Contain '192.168.1.20\SQL2019'
         $script:validatedSqlInstances | Should -Contain 'SQLTARGET\SQL2022'
@@ -1907,6 +2004,68 @@ Describe 'Pair endpoint validation' {
         Should -Invoke Test-DbaPath -ModuleName DbMigration.Discovery -Times 2 -Exactly -ParameterFilter {
             $Path -eq '\\NAS01\SqlBackup'
         }
+        Should -Invoke Get-MigrationBackupPathSpace -ModuleName DbMigration.Discovery -Exactly 1 -ParameterFilter {
+            $Path -eq '\\NAS01\SqlBackup'
+        }
+        Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.Discovery -Exactly 2
+    }
+
+    It 'warns about source full-text dependencies when the target feature is missing' {
+        $script:connectionOrder = 0
+        Mock Connect-DbaInstance -ModuleName DbMigration.Discovery {
+            $script:connectionOrder++
+            $majorVersion = if ($script:connectionOrder -eq 1) { 13 } else { 16 }
+            [pscustomobject]@{ SqlInstance = $SqlInstance; VersionMajor = $majorVersion }
+        }
+        Mock Test-DbaPath -ModuleName DbMigration.Discovery { $true }
+        Mock Get-MigrationBackupPathSpace -ModuleName DbMigration.Discovery {
+            [pscustomobject]@{ AvailableGB = 500; VolumeFreeGB = 500; CapacityGB = 1000; MeasuredAs = 'test-user' }
+        }
+        Mock Get-DbaDatabase -ModuleName DbMigration.Discovery {
+            if ($Database -eq 'tempdb') {
+                [pscustomobject]@{ Name = 'tempdb'; Collation = 'SQL_Latin1_General_CP1_CI_AS' }
+            } else {
+                [pscustomobject]@{ Name = 'appdb'; Collation = 'SQL_Latin1_General_CP1_CI_AS' }
+            }
+        }
+        Mock Invoke-DbaQuery -ModuleName DbMigration.Discovery {
+            if ($Query -match 'SERVERPROPERTY') {
+                [pscustomobject]@{ IsFullTextInstalled = $false }
+            } elseif ($Query -match 'FullTextIndexCount') {
+                [pscustomobject]@{ FullTextIndexCount = 0; FullTextPredicateModuleCount = 2 }
+            } else {
+                @(
+                    [pscustomobject]@{ ModuleName = '[dbo].[SearchOrders]' }
+                    [pscustomobject]@{ ModuleName = '[dbo].[FindCustomer]' }
+                )
+            }
+        }
+        $configuration = @{
+            SourceTargets = @(@{
+                Source = 'source-sql'
+                Target = 'target-sql'
+                BackupPath = '\\NAS01\SqlBackup'
+                MigrationMode = 'Full'
+            })
+        }
+
+        $results = @(Test-MigrationConfiguration -Configuration $configuration)
+        $fullTextResult = @($results | Where-Object Role -eq 'FullText')
+
+        $fullTextResult.Count | Should -Be 1
+        $fullTextResult[0].Status | Should -Be 'Warning'
+        $fullTextResult[0].FullTextIndexCount | Should -Be 0
+        $fullTextResult[0].FullTextPredicateModuleCount | Should -Be 2
+        $fullTextResult[0].Message | Should -Match '\[dbo\]\.\[SearchOrders\].*\[dbo\]\.\[FindCustomer\]'
+        @($results | Where-Object { $_.Role -eq 'BackupPath' -and $_.Status -eq 'Passed' }).Count | Should -Be 1
+    }
+
+    It 'reads free-space capacity without creating a file' {
+        $space = Get-MigrationBackupPathSpace -Path $TestDrive
+
+        $space.AvailableGB | Should -BeGreaterThan 0
+        $space.CapacityGB | Should -BeGreaterThan 0
+        $space.MeasuredAs | Should -Not -BeNullOrEmpty
     }
 }
 

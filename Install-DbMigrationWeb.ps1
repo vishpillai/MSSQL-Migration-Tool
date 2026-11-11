@@ -52,6 +52,7 @@ if (-not (Test-Path -LiteralPath $prerequisiteScript -PathType Leaf)) {
 & $prerequisiteScript -Scope $prerequisiteScope | Out-Null
 
 $requiredFiles = @(
+    'VERSION',
     'Start-PortableDbMigrationWeb.ps1',
     'Invoke-DbMigrationWeb.ps1',
     'Install-DbMigrationPrerequisites.ps1',
@@ -64,6 +65,10 @@ foreach ($relativePath in $requiredFiles) {
     if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
         throw "Required application file missing from source: $relativePath"
     }
+}
+$applicationVersion = (Get-Content -LiteralPath (Join-Path $sourceRoot 'VERSION') -Raw -ErrorAction Stop).Trim()
+if ([string]::IsNullOrWhiteSpace($applicationVersion)) {
+    throw 'VERSION must contain the application version before installation.'
 }
 
 $null = New-Item -ItemType Directory -Path $resolvedInstallPath -Force -ErrorAction Stop
@@ -106,7 +111,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "%APPROOT%Start-PortableDbMigratio
 $appInfoPath = Join-Path $resolvedInstallPath 'appinfo.json'
 @{
     Name = 'Db Migration Tool'
-    Version = '1.0.0'
+    Version = $applicationVersion
     InstalledAtUtc = [DateTime]::UtcNow.ToString('o')
     InstallPath = $resolvedInstallPath
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $appInfoPath -Encoding UTF8

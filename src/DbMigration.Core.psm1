@@ -810,6 +810,73 @@ function Remove-MigrationRunBackupDirectory {
     return $false
 }
 
+function Remove-MigrationPairRunBackupDirectories {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $RootDirectory,
+        [Parameter(Mandatory)][string[]] $Directories,
+        [Parameter(Mandatory)][string] $Source,
+        [Parameter(Mandatory)][string] $Target,
+        [Parameter(Mandatory)][string] $StatePath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Databases,
+        [Parameter(Mandatory)][string] $FailureMessage
+    )
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    foreach ($directory in @($Directories | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
+        try {
+            if (-not (Remove-MigrationRunBackupDirectory -RootDirectory $RootDirectory -Directory $directory `
+                    -Source $Source -Target $Target -ErrorAction Stop)) {
+                continue
+            }
+
+            $removedPath = [System.IO.Path]::GetFullPath($directory).TrimEnd('\')
+            $removedPathPrefix = $removedPath + '\'
+            $state = Get-MigrationState -Path $StatePath
+            foreach ($database in $Databases) {
+                $databaseName = [string]$database
+                if ([string]::IsNullOrWhiteSpace($databaseName)) { continue }
+                $key = Get-MigrationStateKey -Source $Source -Target $Target -Database $databaseName
+                $entry = $state.Databases[$key]
+                if (-not $entry -or [string]::IsNullOrWhiteSpace([string]$entry.BackupPath)) { continue }
+
+                $stateBackupPath = [System.IO.Path]::GetFullPath([string]$entry.BackupPath).TrimEnd('\')
+                if (-not $stateBackupPath.Equals($removedPath, [System.StringComparison]::OrdinalIgnoreCase) -and
+                    -not $stateBackupPath.StartsWith($removedPathPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    continue
+                }
+
+                $status = if ($entry.Status -eq 'Completed') { 'Completed' } else { 'Failed' }
+                $existingError = if ($entry.Contains('Error')) { [string]$entry.Error } else { '' }
+                $errorMessage = if ($status -eq 'Completed') { $existingError } else {
+                    if ([string]::IsNullOrWhiteSpace($existingError)) { $FailureMessage } else { $existingError }
+                }
+                $targetDatabase = if ($entry.Contains('TargetDatabase') -and $entry.TargetDatabase) {
+                    [string]$entry.TargetDatabase
+                } else { $databaseName }
+                $null = Set-MigrationState -Path $StatePath -Source $Source -Target $Target `
+                    -Database $databaseName -TargetDatabase $targetDatabase `
+                    -Status $status -BackupPath '' -ErrorMessage $errorMessage
+            }
+
+            $results.Add([pscustomobject]@{
+                Directory = $directory
+                Status = 'Completed'
+                Message = 'Temporary backup folder deleted; any retry will create a fresh backup.'
+            })
+        }
+        catch {
+            $results.Add([pscustomobject]@{
+                Directory = $directory
+                Status = 'Failed'
+                Message = "Temporary backup folder cleanup failed: $($_.Exception.Message)"
+            })
+        }
+    }
+    return $results.ToArray()
+}
+
 function Set-MigrationState {
     [CmdletBinding()]
     param(
@@ -1104,4 +1171,4 @@ function Write-MigrationReports {
     [pscustomobject]@{ CsvPath = $csvPath; HtmlPath = $htmlPath }
 }
 
-Export-ModuleMember -Function Import-MigrationConfiguration, Set-MigrationSqlConnectionSettings, Set-MigrationTargetCompatibilityLevel, ConvertTo-MigrationTargetDatabaseName, Get-MigrationDatabaseTargetSettings, Get-MigrationTargetDatabaseDecision, Get-MigrationSourceTargetPairDefaults, Test-MigrationServerWorkEnabled, Get-MigrationDatabase, Test-MigrationDatabaseExists, Invoke-MigrationCustomSql, Invoke-MigrationCustomSqlBatch, Get-MigrationDiskUsage, Get-MigrationState, Get-MigrationStateKey, Get-MigrationBackupPath, Get-MigrationRunBackupDirectory, Get-MigrationDatabaseBackupDirectory, Get-MigrationBackupStripeFiles, Set-MigrationLogPath, Write-MigrationLogRecord, Write-MigrationProgressEvent, Wait-MigrationControl, Remove-MigrationRunBackupDirectory, Set-MigrationState, Write-MigrationReports
+Export-ModuleMember -Function Import-MigrationConfiguration, Set-MigrationSqlConnectionSettings, Set-MigrationTargetCompatibilityLevel, ConvertTo-MigrationTargetDatabaseName, Get-MigrationDatabaseTargetSettings, Get-MigrationTargetDatabaseDecision, Get-MigrationSourceTargetPairDefaults, Test-MigrationServerWorkEnabled, Get-MigrationDatabase, Test-MigrationDatabaseExists, Invoke-MigrationCustomSql, Invoke-MigrationCustomSqlBatch, Get-MigrationDiskUsage, Get-MigrationState, Get-MigrationStateKey, Get-MigrationBackupPath, Get-MigrationRunBackupDirectory, Get-MigrationDatabaseBackupDirectory, Get-MigrationBackupStripeFiles, Set-MigrationLogPath, Write-MigrationLogRecord, Write-MigrationProgressEvent, Wait-MigrationControl, Remove-MigrationRunBackupDirectory, Remove-MigrationPairRunBackupDirectories, Set-MigrationState, Write-MigrationReports
