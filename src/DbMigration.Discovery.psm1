@@ -367,6 +367,53 @@ function Get-MigrationDiscovery {
     }
 }
 
+function Get-MigrationCollationPrecheck {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Source,
+        [Parameter(Mandatory)][string] $Target,
+        [Parameter()][AllowEmptyCollection()][object[]] $SourceDatabases = @(),
+        [Parameter()][AllowEmptyString()][string] $TargetTempdbCollation = ''
+    )
+
+    if ($SourceDatabases.Count -eq 0) {
+        return [pscustomobject]@{
+            Source = $Source; Target = $Target; Endpoint = $Source; Role = 'Collation'
+            Database = ''; SourceCollation = ''; TargetTempdbCollation = $TargetTempdbCollation
+            Status = 'Warning'; Message = 'No source user databases were available for the collation precheck.'
+        }
+    }
+
+    foreach ($database in $SourceDatabases) {
+        $sourceCollation = [string]$database.Collation
+        $status = if ([string]::IsNullOrWhiteSpace($sourceCollation) -or [string]::IsNullOrWhiteSpace($TargetTempdbCollation)) {
+            'Warning'
+        } elseif ([string]::Equals($sourceCollation, $TargetTempdbCollation, [StringComparison]::OrdinalIgnoreCase)) {
+            'Passed'
+        } else {
+            'Warning'
+        }
+        $message = if ($status -eq 'Passed') {
+            "Database '$($database.Name)' collation '$sourceCollation' matches target tempdb collation; the database collation will be preserved."
+        } elseif ([string]::IsNullOrWhiteSpace($sourceCollation) -or [string]::IsNullOrWhiteSpace($TargetTempdbCollation)) {
+            "Database collation for '$($database.Name)' could not be verified against target tempdb; the launch readiness gate will require verification."
+        } else {
+            "Database '$($database.Name)' collation '$sourceCollation' differs from target tempdb collation '$TargetTempdbCollation'. The database collation will be preserved, but temp-table or table-variable comparisons may raise collation conflicts."
+        }
+        [pscustomobject]@{
+            Source = $Source
+            Target = $Target
+            Endpoint = [string]$database.Name
+            Role = 'Collation'
+            Database = [string]$database.Name
+            SourceCollation = $sourceCollation
+            TargetTempdbCollation = $TargetTempdbCollation
+            Status = $status
+            Message = $message
+        }
+    }
+}
+
 function Test-MigrationConfiguration {
     [CmdletBinding()]
     param(
@@ -392,6 +439,8 @@ function Test-MigrationConfiguration {
     foreach ($pair in $Configuration.SourceTargets) {
         $migrationMode = if ($pair.Contains('MigrationMode')) { [string]$pair.MigrationMode } else { 'Full' }
         $sourceMajor = $null
+        $sourceConnected = $false
+        $targetConnected = $false
         foreach ($endpoint in @(
             @{ Role = 'Source'; Name = $pair.Source },
             @{ Role = 'Target'; Name = $pair.Target }
@@ -399,6 +448,8 @@ function Test-MigrationConfiguration {
             try {
                 $instance = Connect-DbaInstance -SqlInstance $endpoint.Name -ErrorAction Stop
                 $majorVersion = [int]$instance.VersionMajor
+                if ($endpoint.Role -eq 'Source') { $sourceConnected = $true }
+                else { $targetConnected = $true }
                 # Supported: SQL Server 2012 (11) through 2025 (17); target must be the same or newer than source.
                 $minimum = if ($endpoint.Role -eq 'Target' -and $sourceMajor) { $sourceMajor } else { 11 }
                 $endpoint.AllowedVersions = @($minimum..17)
@@ -439,6 +490,24 @@ function Test-MigrationConfiguration {
                     SqlVersionMajor = $null
                     Status = 'Failed'
                     Message = $_.Exception.Message
+                }
+            }
+        }
+        if ($sourceConnected -and $targetConnected) {
+            try {
+                $sourceDatabases = @(Get-DbaDatabase -SqlInstance $pair.Source -ExcludeSystem -EnableException -ErrorAction Stop |
+                    Select-Object Name, Collation)
+                $targetTempdb = @(Get-DbaDatabase -SqlInstance $pair.Target -Database tempdb -EnableException -ErrorAction Stop |
+                    Select-Object -First 1)
+                if ($targetTempdb.Count -ne 1) { throw "Could not read tempdb collation on '$($pair.Target)'." }
+                Get-MigrationCollationPrecheck -Source $pair.Source -Target $pair.Target `
+                    -SourceDatabases $sourceDatabases -TargetTempdbCollation ([string]$targetTempdb[0].Collation)
+            }
+            catch {
+                [pscustomobject]@{
+                    Source = $pair.Source; Target = $pair.Target; Endpoint = $pair.Target; Role = 'Collation'
+                    Database = ''; SourceCollation = ''; TargetTempdbCollation = ''; Status = 'Warning'
+                    Message = "Database collation precheck could not be completed: $($_.Exception.Message)"
                 }
             }
         }
@@ -951,4 +1020,4 @@ ORDER BY ModuleName;
     }
 }
 
-Export-ModuleMember -Function Get-MigrationDiscovery, Get-MigrationServerObjectCounts, Test-MigrationRestoreCapacity, Test-MigrationTdeReadiness, Test-MigrationConfiguration, Get-MigrationReadinessAssessment
+Export-ModuleMember -Function Get-MigrationDiscovery, Get-MigrationServerObjectCounts, Test-MigrationRestoreCapacity, Test-MigrationTdeReadiness, Get-MigrationCollationPrecheck, Test-MigrationConfiguration, Get-MigrationReadinessAssessment

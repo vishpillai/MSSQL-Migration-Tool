@@ -95,6 +95,16 @@
     .readiness-badge-muted { background: #eef2f6; color: #42576d; }
     .readiness-report-body { padding: 14px; }
     .readiness-report-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .offline-plan { margin: 14px 0; padding: 12px 0; border-top: 1px solid var(--line, #d8e0e8); border-bottom: 1px solid var(--line, #d8e0e8); }
+    .offline-plan h3 { margin: 0 0 6px; font-size: 15px; }
+    .offline-plan-status { margin: 0 0 8px; font-weight: 600; }
+    .offline-plan-status.blocked { color: #a52121; }
+    .offline-plan-status.review { color: #805300; }
+    .offline-plan-status.ready { color: #1c6b35; }
+    .offline-plan ol { margin: 0; padding-left: 22px; }
+    .offline-plan li { margin: 8px 0; overflow-wrap: anywhere; }
+    .offline-plan li strong { display: block; }
+    .offline-plan-detail { color: var(--text-secondary, #5b7085); }
     .readiness-findings td { min-width: 120px; max-width: 420px; white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
     .readiness-findings td:nth-child(6), .readiness-findings td:nth-child(7) { min-width: 220px; }
     .readiness-severity-critical { color: #a52121; font-weight: 700; }
@@ -660,82 +670,257 @@
       .app-navigation a { padding: 8px 5px; font-size: 12px; }
       #migration-monitor { margin-top: 12px; }
     }
+
     :root {
-      --canvas: #edf1ed; --surface: #fff; --surface-subtle: #f5f7f4; --line: #d6ded7;
-      --text-primary: #1d2b24; --text-muted: #5e6e64; --success: #247449; --success-bg: #e8f4ec;
-      --warning: #8a5c08; --warning-bg: #fff3d8; --danger: #a43c36; --danger-bg: #fff0ed;
-      --info-bg: #e8f1ee; color: var(--text-primary);
-      font-family: "Aptos", "Segoe UI Variable", "Segoe UI", sans-serif; background: var(--canvas);
+      --canvas: #edf1ed;
+      --surface: #ffffff;
+      --surface-subtle: #f5f7f4;
+      --line: #d6ded7;
+      --text-primary: #1d2b24;
+      --text-muted: #5e6e64;
+      --success: #247449;
+      --success-bg: #e8f4ec;
+      --warning: #8a5c08;
+      --warning-bg: #fff3d8;
+      --danger: #a43c36;
+      --danger-bg: #fff0ed;
+      --info-bg: #e8f1ee;
+      color: var(--text-primary);
+      font-family: "Aptos", "Segoe UI Variable", "Segoe UI", sans-serif;
+      background: var(--canvas);
     }
     html[data-theme="Dark"] {
-      --canvas: #141d19; --surface: #1d2923; --surface-subtle: #24332b; --line: #3a4b41;
-      --text-primary: #e7eee9; --text-muted: #b1c0b7; --success-bg: #1d3b2b;
-      --warning-bg: #443817; --danger-bg: #482622; --info-bg: #263a35;
+      --canvas: #141d19;
+      --surface: #1d2923;
+      --surface-subtle: #24332b;
+      --line: #3a4b41;
+      --text-primary: #e7eee9;
+      --text-muted: #b1c0b7;
+      --success-bg: #1d3b2b;
+      --warning-bg: #443817;
+      --danger-bg: #482622;
+      --info-bg: #263a35;
     }
     html[data-theme="Blue"] {
-      --canvas: #eaf0f3; --surface: #fbfdfe; --surface-subtle: #eff4f6; --line: #ccd9dd;
-      --text-primary: #21343a; --text-muted: #5a7075; --info-bg: #e8f1f3;
+      --canvas: #eaf0f3;
+      --surface: #fbfdfe;
+      --surface-subtle: #eff4f6;
+      --line: #ccd9dd;
+      --text-primary: #21343a;
+      --text-muted: #5a7075;
+      --info-bg: #e8f1f3;
     }
     body { color: var(--text-primary); background: var(--canvas); }
-    body.application-active { display: grid; grid-template-columns: 244px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; min-height: 100vh; min-height: 100dvh; align-items: stretch; }
+    body.application-active {
+      display: grid;
+      grid-template-columns: 244px minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) auto;
+      min-height: 100vh;
+      min-height: 100dvh;
+      align-items: stretch;
+    }
     body.application-active > header {
-      position: sticky; inset: 0 auto auto 0; grid-column: 1; grid-row: 1 / 3; display: flex;
-      width: 244px; height: 100vh; height: 100dvh; min-height: 0; flex-direction: column;
-      align-items: stretch; justify-content: flex-start; gap: 24px; padding: 22px 14px 14px;
-      border: 0; border-right: 1px solid #34463d; background: #192a23; box-shadow: none;
+      position: sticky;
+      inset: 0 auto auto 0;
+      grid-column: 1;
+      grid-row: 1 / 3;
+      display: flex;
+      width: 244px;
+      height: 100vh;
+      height: 100dvh;
+      min-height: 0;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      gap: 24px;
+      padding: 22px 14px 14px;
+      border: 0;
+      border-right: 1px solid #34463d;
+      background: #192a23;
+      box-shadow: none;
     }
     header h1::before { content: none; }
     body.application-active .brand { min-width: 0; align-items: center; gap: 9px; }
     body.application-active .brand h1 { color: #f3f6f3; font-size: 15px; line-height: 1.25; overflow-wrap: anywhere; }
     body.application-active .header-context { color: #b5c4ba; }
     body.application-active #brand-logo { flex: 0 0 auto; max-width: 46px; max-height: 38px; margin: 0; }
-    body.application-active .app-navigation { order: 0; display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; align-items: stretch; gap: 5px; overflow-x: hidden; overflow-y: auto; padding: 0; }
-    body.application-active .app-navigation a { min-height: 42px; flex: 0 0 auto; display: flex; align-items: center; padding: 9px 11px; border: 1px solid transparent; border-radius: 6px; color: #c3d0c8; text-align: left; font-size: 13px; }
-    body.application-active .app-navigation a:hover, body.application-active .app-navigation a:focus-visible { color: #fff; background: #263a31; outline: 2px solid #8cc6a5; outline-offset: 1px; }
-    body.application-active .app-navigation a[aria-current="page"] { color: #f3fff7; border-color: #476d56; background: #2b4938; box-shadow: inset 3px 0 #a6d68d; font-weight: 700; }
-    body.application-active .header-actions { display: flex; flex: 0 0 auto; flex-direction: column; align-items: stretch; gap: 9px; padding-top: 12px; border-top: 1px solid #34463d; }
+    body.application-active .app-navigation {
+      order: 0;
+      display: flex;
+      min-height: 0;
+      flex: 1 1 auto;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 5px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding: 0;
+    }
+    body.application-active .app-navigation a {
+      min-height: 42px;
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      padding: 9px 11px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: #c3d0c8;
+      text-align: left;
+      font-size: 13px;
+      font-weight: 550;
+    }
+    body.application-active .app-navigation a:hover,
+    body.application-active .app-navigation a:focus-visible { color: #fff; background: #263a31; outline: 2px solid #8cc6a5; outline-offset: 1px; }
+    body.application-active .app-navigation a[aria-current="page"] {
+      color: #f3fff7;
+      border-color: #476d56;
+      background: #2b4938;
+      box-shadow: inset 3px 0 #a6d68d;
+      font-weight: 700;
+    }
+    body.application-active .header-actions {
+      display: flex;
+      flex: 0 0 auto;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 9px;
+      padding-top: 12px;
+      border-top: 1px solid #34463d;
+    }
     body.application-active #current-user { margin: 0; overflow-wrap: anywhere; font-size: 12px; }
     body.application-active #logout { width: 100%; justify-content: center; }
-    body.application-active > #workspace-main { grid-column: 2; grid-row: 1; width: 100%; max-width: none; min-height: 0; padding: 26px clamp(18px, 2.4vw, 36px); overflow: auto; }
-    body.application-active > footer { grid-column: 2; grid-row: 2; padding: 10px clamp(18px, 2.4vw, 36px); border-top: 1px solid var(--line); background: var(--surface); color: var(--text-muted); }
+    body.application-active > #workspace-main {
+      grid-column: 2;
+      grid-row: 1;
+      width: 100%;
+      max-width: none;
+      min-height: 0;
+      padding: 26px clamp(18px, 2.4vw, 36px);
+      overflow: auto;
+    }
+    body.application-active > footer {
+      grid-column: 2;
+      grid-row: 2;
+      padding: 10px clamp(18px, 2.4vw, 36px);
+      border-top: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text-muted);
+    }
     #application { width: 100%; max-width: 1480px; margin: 0 auto; gap: 18px; }
     #application > section.card { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-    #application > section > h2 { margin: 0 0 16px; padding: 0 0 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--text-primary); font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif; font-size: 22px; }
+    #application > section > h2 {
+      margin: 0 0 16px;
+      padding: 0 0 12px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      color: var(--text-primary);
+      font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
+      font-size: 22px;
+      font-weight: 650;
+    }
     .card { border-color: var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 1px 2px #17251d0a; }
     h3, h4 { color: var(--text-primary); }
     .muted, .header-context { color: var(--text-muted); }
     body.application-active .muted { line-height: 1.5; }
     label { color: var(--text-primary); font-size: 12px; font-weight: 650; }
-    input[type="text"], input[type="password"], input[type="search"], input[type="date"], select, textarea { min-height: 38px; padding: 8px 10px; border: 1px solid #b9c8be; border-radius: 5px; color: var(--text-primary); background: var(--surface); }
-    input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid #5b9c7d; outline-offset: 2px; }
-    button { min-height: 38px; padding: 8px 13px; border: 1px solid #28694f; border-radius: 5px; background: #28694f; box-shadow: none; font-weight: 650; }
+    input[type="text"], input[type="password"], input[type="search"], input[type="date"], select, textarea {
+      min-height: 38px;
+      padding: 8px 10px;
+      border: 1px solid #b9c8be;
+      border-radius: 5px;
+      color: var(--text-primary);
+      background: var(--surface);
+    }
+    textarea { min-height: 150px; }
+    input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, summary:focus-visible {
+      outline: 3px solid #5b9c7d;
+      outline-offset: 2px;
+    }
+    button {
+      min-height: 38px;
+      padding: 8px 13px;
+      border: 1px solid #28694f;
+      border-radius: 5px;
+      background: #28694f;
+      box-shadow: none;
+      font-weight: 650;
+    }
     button:hover:not(:disabled) { background: #20583f; box-shadow: none; }
     button.secondary { border-color: var(--line); background: var(--surface); color: var(--text-primary); }
     button.secondary:hover:not(:disabled) { background: var(--surface-subtle); }
-    .pair-card, .patch-panel, .custom-sql-export-toolbar, .custom-sql-result-set, .live-monitor-card, .disk-server-card, .monitor-stage-card, .monitor-current-card, .monitor-metric, .patch-metric, .live-monitor-metric, .live-monitor-trend { border-color: var(--line); border-radius: 6px; background: var(--surface); box-shadow: none; }
+    button:disabled { opacity: .56; }
+    .pair-card, .patch-panel, .custom-sql-export-toolbar, .custom-sql-result-set,
+    .live-monitor-card, .disk-server-card, .monitor-stage-card, .monitor-current-card,
+    .monitor-metric, .patch-metric, .live-monitor-metric, .live-monitor-trend {
+      border-color: var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      box-shadow: none;
+    }
     .pair-card { padding: 13px; border-left: 3px solid var(--accent); }
     #options.options { gap: 8px; padding: 12px; border-color: var(--line); border-radius: 6px; background: var(--surface-subtle); }
     #options.options > .check { min-height: 42px; padding: 9px 10px; border-color: var(--line); border-radius: 5px; background: var(--surface); }
     #options.options > .check:has(input:checked) { border-color: var(--accent); color: var(--text-primary); background: var(--info-bg); }
-    .migration-setup-disclosure > summary, .patch-panel summary { padding: 13px 15px; border: 1px solid var(--line); border-radius: 6px; color: var(--text-primary); background: var(--surface); font-size: 14px; }
+    .migration-setup-disclosure > summary, .patch-panel summary {
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: var(--text-primary);
+      background: var(--surface);
+      font-size: 14px;
+    }
+    .migration-setup-disclosure[open] > summary { border-radius: 6px 6px 0 0; }
     #migration-setup-content, .patch-content { padding: 16px; }
     #migration-monitor { margin-top: 18px; padding: 16px; border-color: var(--line); border-radius: 6px; background: var(--surface); }
     #migration-monitor h2 { margin: -16px -16px 14px; padding: 12px 16px; border-radius: 6px 6px 0 0; color: var(--text-primary); background: var(--surface-subtle); }
     .monitor-stage-card, .monitor-current-card { padding: 12px; }
     .monitor-metric { border-top: 1px solid var(--line) !important; padding: 11px; }
+    .monitor-metric strong { font-size: 21px; }
     .status-line { padding: 10px 0; border-bottom: 1px solid var(--line); }
     .pill { border-color: var(--line); border-radius: 999px; background: var(--surface-subtle); color: var(--text-primary); }
     .table-wrap { border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+    table { font-size: 12px; }
     th { color: var(--text-primary); background: var(--surface-subtle); }
     tbody tr:nth-child(even) td { background: var(--surface-subtle); }
     tbody tr:hover td { background: var(--info-bg); }
     .error:not(:empty) { border-color: #e3b5ae; border-radius: 5px; color: var(--danger); background: var(--danger-bg); }
     #events { border-color: var(--line); border-radius: 5px; background: #17241e; color: #e1ebe4; }
+    #login-card { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 12px 32px #17251d18; }
+    #login-card h2 { color: var(--text-primary); background: var(--surface); }
+    .login-visual { min-height: 390px; }
     @media (max-width: 980px) {
       body.application-active { display: flex; min-height: 100vh; min-height: 100dvh; }
-      body.application-active > header { position: sticky; z-index: 20; inset: 0 auto auto; display: flex; width: 100%; height: auto; min-height: 58px; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 9px 14px 0; border-right: 0; border-bottom: 1px solid #34463d; }
+      body.application-active > header {
+        position: sticky;
+        z-index: 20;
+        inset: 0 auto auto;
+        display: flex;
+        width: 100%;
+        height: auto;
+        min-height: 58px;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 14px;
+        padding: 9px 14px 0;
+        border-right: 0;
+        border-bottom: 1px solid #34463d;
+      }
       body.application-active .brand { flex: 1 1 180px; }
-      body.application-active .app-navigation { order: 3; flex: 1 1 100%; width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; flex-direction: row; gap: 4px; overflow-x: auto; padding-bottom: 8px; }
+      body.application-active .app-navigation {
+        order: 3;
+        flex: 1 1 100%;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        box-sizing: border-box;
+        flex-direction: row;
+        gap: 4px;
+        overflow-x: auto;
+        padding-bottom: 8px;
+      }
       body.application-active .app-navigation a { min-height: 38px; flex: 0 0 auto; padding: 8px 10px; }
       body.application-active .header-actions { flex-direction: row; align-items: center; gap: 8px; padding: 0; border: 0; }
       body.application-active > #workspace-main { flex: 1; min-height: 0; padding: 18px 14px; }
@@ -759,7 +944,9 @@
       .login-visual > svg { overflow: hidden; }
       #login-form { padding: 20px; }
     }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
   </style>
 </head>
 <body>
@@ -3549,6 +3736,111 @@
       })));
     }
 
+    function buildOfflineMigrationPlan(report, mode, skipMissingUsers) {
+      const migrationMode = mode === "SchemaOnly" ? "SchemaOnly" : "Full";
+      const assessments = report.assessments || [];
+      const findings = assessments.flatMap((assessment) => (assessment.Findings || []).map((finding) => ({
+        ...finding,
+        Database: assessment.Database
+      })));
+      const critical = findings.filter((finding) => finding.Severity === "Critical");
+      const warnings = findings.filter((finding) => finding.Severity === "Warning");
+      const cdcDetected = findings.some((finding) => /cdc|change data capture/i.test(`${finding.Category} ${finding.Check} ${finding.Details}`));
+      const blocked = critical.length > 0 || (Number(report.blockedCount) || 0) > 0;
+      const reviewRequired = !blocked && (warnings.length > 0 || (Number(report.reviewRequiredCount) || 0) > 0);
+      const steps = [];
+      const seen = new Set();
+      const addStep = (phase, action, detail, database = "", severity = "Information") => {
+        const key = `${phase}|${action}|${detail}|${database}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        steps.push({ Order: steps.length + 1, Phase: phase, Action: action, Detail: detail, Database: database, Severity: severity });
+      };
+      const addFindingSteps = (items, phase, limit) => {
+        for (const finding of items.slice(0, limit)) {
+          addStep(phase, finding.Check || finding.Category || "Review finding", finding.Recommendation || finding.Details || "Review this finding before migration.", finding.Database || "", finding.Severity || "Warning");
+        }
+        if (items.length > limit) {
+          addStep(phase, "Review remaining findings", `${items.length - limit} additional findings are listed in the assessment table.`, "", "Warning");
+        }
+      };
+
+      if (critical.length > 0) addFindingSteps(critical, "Resolve blockers", 20);
+      if (warnings.length > 0) addFindingSteps(warnings, "Review risks", critical.length > 0 ? 8 : 12);
+      addStep("Before migration", "Review target replacement", "Confirm target database names and per-database overwrite approvals. The advisor does not change either server.");
+      if (migrationMode === "SchemaOnly") {
+        addStep("Before migration", "Confirm schema-only scope", "No table data will be copied. The source is only inspected; schema and selected database objects are created on the target.");
+        if (!skipMissingUsers) {
+          addStep("Before migration", "Verify target logins", "Confirm every database user's login exists on the target; otherwise schema transfer may fail.", "", "Warning");
+        }
+      } else {
+        addStep("Before migration", "Prepare the cutover window", "Full mode backs up and restores database data. Quiesce application writes as planned and verify backup/restore capacity.");
+      }
+      if (blocked) {
+        addStep("Decision", "Do not start yet", "Resolve all critical findings, then rerun the offline readiness assessment.", "", "Critical");
+        if (migrationMode === "SchemaOnly") addStep("Planned migration", "Schema-only", "This action is blocked until critical findings are resolved.");
+      } else if (reviewRequired) {
+        addStep("Decision", "Review before starting", "Resolve or explicitly accept each warning according to your change and risk approvals, then rerun readiness.", "", "Warning");
+      } else {
+        addStep("Decision", "Ready for operator approval", "No critical blockers were detected. Confirm the plan and start the migration when the change window is approved.");
+      }
+      if (!blocked) {
+        addStep("Migration", migrationMode === "SchemaOnly" ? "Copy schema only" : "Back up and restore", migrationMode === "SchemaOnly"
+          ? "Copy schema and selected database objects without table rows; no CDC setup or source changes are performed."
+          : "Transfer the database data, then run configured post-migration checks.");
+      }
+      if (migrationMode === "SchemaOnly" && cdcDetected) {
+        addStep("After migration", "Plan CDC separately", "CDC capture configuration and history are omitted. Configure CDC on the target and reinitialize downstream consumers only if required.", "", "Warning");
+      }
+      if (migrationMode === "SchemaOnly" && skipMissingUsers) {
+        addStep("After migration", "Complete user mapping", "Users without matching target logins are skipped. Create or copy the required logins, then repair orphaned users on the target.", "", "Warning");
+      }
+      addStep("After migration", "Verify target and application", migrationMode === "SchemaOnly"
+        ? "Confirm the expected objects and users are present, verify no table data was copied, and test dependent applications."
+        : "Validate database state, data counts, logins, jobs, application behavior, and backups before cutover.");
+
+      return {
+        PlanType: "OfflineMigrationActionPlan",
+        GeneratedAt: new Date().toISOString(),
+        Source: report.source,
+        Target: report.target,
+        MigrationMode: migrationMode,
+        Readiness: blocked ? "Blocked" : reviewRequired ? "Review required" : "No blockers detected",
+        BlockedDatabaseCount: Number(report.blockedCount) || 0,
+        ReviewRequiredDatabaseCount: Number(report.reviewRequiredCount) || 0,
+        SkipUsersWithoutTargetLogins: migrationMode === "SchemaOnly" && skipMissingUsers === true,
+        Engine: "Built-in deterministic rules using the local readiness findings; no AI service or internet access is used.",
+        Steps: steps
+      };
+    }
+
+    function renderOfflineMigrationPlan(plan) {
+      const section = document.createElement("section");
+      section.className = "offline-plan";
+      const heading = document.createElement("h3");
+      heading.textContent = "Offline migration plan";
+      const status = document.createElement("p");
+      status.className = `offline-plan-status ${plan.Readiness === "Blocked" ? "blocked" : plan.Readiness === "Review required" ? "review" : "ready"}`;
+      status.setAttribute("role", "status");
+      status.textContent = `${plan.Readiness} · ${plan.MigrationMode === "SchemaOnly" ? "schema only" : "full database"}`;
+      const note = document.createElement("p");
+      note.className = "muted";
+      note.textContent = plan.Engine;
+      const list = document.createElement("ol");
+      for (const step of plan.Steps) {
+        const item = document.createElement("li");
+        const title = document.createElement("strong");
+        title.textContent = `${step.Phase}: ${step.Action}${step.Database ? ` (${step.Database})` : ""}`;
+        const detail = document.createElement("span");
+        detail.className = "offline-plan-detail";
+        detail.textContent = step.Detail;
+        item.append(title, detail);
+        list.append(item);
+      }
+      section.append(heading, status, note, list);
+      return section;
+    }
+
     function renderReadinessReport(report, pairIndex) {
       const storageKey = `dbMigrationReadinessExpanded.v1.${pairIndex}`;
       const section = document.createElement("details");
@@ -3589,6 +3881,8 @@
 
       const body = document.createElement("div");
       body.className = "readiness-report-body";
+      const pair = pairs[pairIndex] || {};
+      const offlinePlan = buildOfflineMigrationPlan(report, pair.MigrationMode || report.migrationMode, pair.SkipUsersWithoutTargetLogins === true);
 
       const actions = document.createElement("div");
       actions.className = "readiness-report-actions";
@@ -3602,12 +3896,20 @@
         button.textContent = label;
         actions.append(button);
       }
+      const planButton = document.createElement("button");
+      planButton.type = "button";
+      planButton.className = "secondary";
+      planButton.dataset.action = "export-offline-plan";
+      planButton.dataset.pairIndex = String(pairIndex);
+      planButton.textContent = "Download offline action plan (JSON)";
+      actions.append(planButton);
       body.append(actions);
 
       const disclaimer = document.createElement("p");
       disclaimer.className = "muted";
       disclaimer.textContent = "DMA-inspired local checks only. This is not Microsoft DMA and is not exhaustive; candidate code matches may be false positives. No migration or source/target changes were performed.";
       body.append(disclaimer);
+      body.append(renderOfflineMigrationPlan(offlinePlan));
 
       const tableWrap = document.createElement("div");
       tableWrap.className = "table-wrap";
@@ -3643,7 +3945,14 @@
       return section;
     }
 
-    function downloadReadinessReport(report, format) {
+    function downloadOfflineMigrationPlan(report, pairIndex) {
+      const pair = pairs[pairIndex] || {};
+      const plan = buildOfflineMigrationPlan(report, pair.MigrationMode || report.migrationMode, pair.SkipUsersWithoutTargetLogins === true);
+      const timestamp = new Date(report.assessedAt || Date.now()).toISOString().replace(/[:.]/g, "-");
+      downloadReportingFile(`offline-migration-plan-${timestamp}.json`, JSON.stringify(plan, null, 2), "application/json;charset=utf-8");
+    }
+
+    function downloadReadinessReport(report, format, pairIndex) {
       const rows = getReadinessReportRows(report);
       const timestamp = new Date(report.assessedAt || Date.now()).toISOString().replace(/[:.]/g, "-");
       const safeCell = (value) => {
@@ -3654,7 +3963,11 @@
       let contentType;
       let extension;
       if (format === "json") {
-        content = JSON.stringify(report, null, 2);
+        const pair = pairs[pairIndex] || {};
+        content = JSON.stringify({
+          ...report,
+          offlinePlan: buildOfflineMigrationPlan(report, pair.MigrationMode || report.migrationMode, pair.SkipUsersWithoutTargetLogins === true)
+        }, null, 2);
         contentType = "application/json;charset=utf-8";
         extension = "json";
       } else if (format === "csv") {
@@ -3712,6 +4025,75 @@
       }
     }
 
+    async function assessMigrationLaunch(planPairs) {
+      const blockingFindings = [];
+      const warningFindings = [];
+      const allowedReadiness = new Set(["Blocked", "Review required", "No blockers detected"]);
+      const blockedStatuses = new Set(["Failed", "Not verified", "Unknown", "Unavailable", "Error"]);
+
+      for (const planPair of planPairs) {
+        if (!planPair.Databases.length) continue;
+        const assessments = [];
+        const databaseNames = planPair.Databases.map((database) => database.Database);
+        for (let offset = 0; offset < databaseNames.length; offset += 100) {
+          const batch = databaseNames.slice(offset, offset + 100);
+          const result = await api("/api/readiness-assessment", {
+            Pair: { Source: planPair.Source, Target: planPair.Target, MigrationMode: planPair.MigrationMode },
+            Databases: batch
+          });
+          if (!Array.isArray(result.assessments) || result.assessments.length !== batch.length) {
+            throw new Error(`Readiness assessment was incomplete for ${planPair.Source} → ${planPair.Target}; migration was stopped.`);
+          }
+          assessments.push(...result.assessments);
+        }
+
+        const pairState = pairs.find((item) => item.Source === planPair.Source && item.Target === planPair.Target);
+        for (const assessment of assessments) {
+          if (!allowedReadiness.has(assessment.Readiness) || !Array.isArray(assessment.Findings) || !assessment.Findings.length) {
+            blockingFindings.push(`${assessment.Database || "Unknown database"}: readiness result was incomplete or unrecognized`);
+            continue;
+          }
+          if (assessment.Readiness === "Blocked") blockingFindings.push(`${assessment.Database}: critical readiness blockers`);
+          for (const finding of assessment.Findings) {
+            if (!finding || !["Critical", "Warning", "Information"].includes(finding.Severity) || !finding.Status) {
+              blockingFindings.push(`${assessment.Database}: readiness returned an unrecognized finding`);
+            } else if (finding.Severity === "Critical" || blockedStatuses.has(finding.Status)) {
+              blockingFindings.push(`${assessment.Database}: ${finding.Check || finding.Category || "unverified check"} — ${finding.Recommendation || finding.Details || finding.Status}`);
+            } else if (finding.Severity === "Warning") {
+              warningFindings.push({
+                Database: assessment.Database,
+                Check: finding.Check || finding.Category || "Review finding",
+                Recommendation: finding.Recommendation || finding.Details || "Review this warning before migration."
+              });
+            }
+          }
+          if (assessment.Readiness === "Review required" && !assessment.Findings.some((finding) => finding.Severity === "Warning")) {
+            warningFindings.push({ Database: assessment.Database, Check: "Readiness review", Recommendation: "Review this assessment before migration." });
+          }
+        }
+
+        const blockedCount = assessments.filter((assessment) => assessment.Readiness === "Blocked").length;
+        const reviewCount = assessments.filter((assessment) => assessment.Readiness === "Review required").length;
+        const noBlockersCount = assessments.filter((assessment) => assessment.Readiness === "No blockers detected").length;
+        if (pairState) {
+          pairState.readinessReport = {
+            source: planPair.Source,
+            target: planPair.Target,
+            migrationMode: planPair.MigrationMode,
+            assessments,
+            databaseCount: assessments.length,
+            blockedCount,
+            reviewRequiredCount: reviewCount,
+            noBlockersCount,
+            assessedAt: new Date().toISOString()
+          };
+          pairState.readinessError = "";
+        }
+      }
+
+      return { blockingFindings, warningFindings };
+    }
+
     async function validatePair(index) {
       const pair = pairs[index];
       pair.Source = document.querySelector(`[data-pair-index="${index}"][data-field="Source"]`).value.trim();
@@ -3731,7 +4113,7 @@
             MigrationMode: pair.MigrationMode
           }
         });
-        pair.summary = `Preflight: ${pair.validation.passedCount} passed · ${pair.validation.failedCount} failed · ${pair.validation.skippedCount} skipped.`;
+        pair.summary = `Preflight: ${pair.validation.passedCount} passed · ${pair.validation.warningCount || 0} warnings · ${pair.validation.failedCount} failed · ${pair.validation.skippedCount} skipped.`;
       } catch (error) {
         pair.validation = null;
         pair.summary = `Validation request failed: ${error.message}`;
@@ -4045,7 +4427,11 @@
       if (button.dataset.action === "assess-readiness") await assessPairReadiness(index);
       if (button.dataset.action === "export-readiness") {
         const report = pairs[index]?.readinessReport;
-        if (report) downloadReadinessReport(report, button.dataset.readinessFormat);
+        if (report) downloadReadinessReport(report, button.dataset.readinessFormat, index);
+      }
+      if (button.dataset.action === "export-offline-plan") {
+        const report = pairs[index]?.readinessReport;
+        if (report) downloadOfflineMigrationPlan(report, index);
       }
       if (button.dataset.action === "remove") {
         pairs.splice(index, 1);
@@ -4776,13 +5162,50 @@
         $("migration-error").textContent = "Select at least one database or server-level migration option, and discover each pair first.";
         return;
       }
+      let readinessWarningsApproved = false;
+      if (selectedCount > 0) {
+        $("start").disabled = true;
+        let decisionInputs;
+        try {
+          decisionInputs = await assessMigrationLaunch(planPairs);
+          renderPairs();
+          $("start").disabled = true;
+        } catch (error) {
+          $("migration-error").textContent = `Fresh read-only safety assessment failed; migration was blocked. ${error.message}`;
+          updateStartButton();
+          return;
+        }
+        if (decisionInputs.blockingFindings.length) {
+          $("migration-error").textContent = `Readiness gate blocked this migration:\n${decisionInputs.blockingFindings.slice(0, 8).join("\n")}${decisionInputs.blockingFindings.length > 8 ? `\n+${decisionInputs.blockingFindings.length - 8} more blocker(s)` : ""}`;
+          updateStartButton();
+          return;
+        }
+        if (decisionInputs.warningFindings.length) {
+          const warningLines = decisionInputs.warningFindings.slice(0, 8).map((finding) =>
+            `${finding.Database}: ${finding.Check} — ${finding.Recommendation}`);
+          if (!await showAppDialog({
+            title: "Review readiness warnings",
+            message: `${decisionInputs.warningFindings.length} warning(s) remain. The server will repeat these read-only checks before launch. Critical or unverified results always block. Approve continuing with these warnings?\n\n${warningLines.join("\n")}${decisionInputs.warningFindings.length > warningLines.length ? `\n+${decisionInputs.warningFindings.length - warningLines.length} more warning(s) in the assessment` : ""}`,
+            kind: "warning",
+            confirm: true,
+            confirmLabel: "Approve warnings"
+          })) {
+            updateStartButton();
+            return;
+          }
+          readinessWarningsApproved = true;
+        }
+      }
       if (overwriteList.length && !await showAppDialog({
         title: "Replace target databases?",
         message: `These target databases will be replaced:\n\n${overwriteList.join("\n")}\n\nContinue?`,
         kind: "warning",
         confirm: true,
         confirmLabel: "Replace"
-      })) return;
+      })) {
+        updateStartButton();
+        return;
+      }
       const pairSummary = planPairs.map((pair) => {
         const changes = pair.Databases.filter((database) =>
           database.Database.toLowerCase() !== database.TargetDatabase.toLowerCase() || database.TargetCompatibilityLevel !== null);
@@ -4797,15 +5220,18 @@
         : "";
       if (!await showAppDialog({
         title: "Start migration?",
-        message: `Run pairs and databases sequentially in this order?\n\n${pairSummary}\n\nSchema-only mode replaces an existing target only when its per-database overwrite box is checked. It creates an empty schema copy and does not migrate table data. Linked servers are controlled separately by the server-object option.${linkedServerSummary}`,
+        message: `Run pairs and databases sequentially in this order?\n\n${pairSummary}\n\nFresh read-only readiness checks passed. ${readinessWarningsApproved ? "You explicitly approved the remaining warnings. " : "No warnings require approval. "}Schema-only mode replaces an existing target only when its per-database overwrite box is checked. It creates an empty schema copy and does not migrate table data. Linked servers are controlled separately by the server-object option.${linkedServerSummary}`,
         confirm: true,
         confirmLabel: "Start migration"
-      })) return;
+      })) {
+        updateStartButton();
+        return;
+      }
       $("start").disabled = true;
       try {
         let result;
         try {
-          result = await api("/api/migrate", { Pairs: planPairs, Options: options });
+          result = await api("/api/migrate", { Pairs: planPairs, Options: options, ReadinessWarningsApproved: readinessWarningsApproved });
         } finally {
           clearLinkedServerPasswords();
           planPairs.forEach((pair) => pair.LinkedServers?.forEach((definition) => { definition.Password = ""; }));

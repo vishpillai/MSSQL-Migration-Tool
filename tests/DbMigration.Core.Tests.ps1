@@ -4,6 +4,59 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.WebAuth.psm1') -Force
 }
 
+Describe 'Migration file logging' {
+    AfterEach {
+        InModuleScope DbMigration.Core {
+            $script:MigrationLogPath = $null
+        }
+    }
+
+    It 'appends parseable JSONL progress records' {
+        $logPath = Join-Path $TestDrive 'logs\migration.jsonl'
+        $progressPath = Join-Path $TestDrive 'progress'
+        Set-MigrationLogPath -Path $logPath
+
+        Write-MigrationProgressEvent -ProgressPath $progressPath -Source 'source01' -Target 'target01' `
+            -Database 'appdb' -Stage 'Backup' -Status 'InProgress' -PercentComplete 35 -Message 'Backup started.'
+        Write-MigrationLogRecord -Record @{ Level = 'Error'; Event = 'TestFailure'; Message = 'Example failure.' }
+
+        $records = @(Get-Content -LiteralPath $logPath | ForEach-Object { ConvertFrom-Json -InputObject $_ })
+        $records.Count | Should -Be 2
+        $records[0].Event | Should -Be 'Progress'
+        $records[0].Database | Should -Be 'appdb'
+        $records[0].PercentComplete | Should -Be 35
+        $records[1].Event | Should -Be 'TestFailure'
+    }
+}
+
+Describe 'Migration database collation verification' {
+    It 'accepts matching collation names without case sensitivity' {
+        $result = Assert-MigrationDatabaseCollation -Source source -Target target -Database appdb `
+            -SourceCollation 'Latin1_General_BIN' -TargetCollation 'latin1_general_bin'
+
+        $result.Collation | Should -Be 'latin1_general_bin'
+    }
+
+    It 'rejects a target database collation mismatch' {
+        { Assert-MigrationDatabaseCollation -Source source -Target target -Database appdb `
+            -SourceCollation 'Latin1_General_BIN' -TargetCollation 'SQL_Latin1_General_CP1_CI_AS' } |
+            Should -Throw '*Database collation mismatch*'
+    }
+
+    It 'rejects unverified collation values' {
+        { Assert-MigrationDatabaseCollation -Source source -Target target -Database appdb `
+            -SourceCollation 'Latin1_General_BIN' -TargetCollation '' } |
+            Should -Throw '*Could not verify database collation*'
+    }
+
+    It 'carries the source database collation into the full restore verification' {
+        $transferText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\src\DbMigration.Transfer.psm1') -Raw
+        $transferText | Should -Match 'SourceCollation = \[string\]\$_.Collation'
+        $transferText | Should -Match '\$sourceCollation = \[string\]\$_.SourceCollation'
+        $transferText | Should -Match '-Database \$database -SourceCollation \$sourceCollation'
+    }
+}
+
 Describe 'Schema-only transfer result handling' {
     It 'suppresses cleanup cmdlet output so failed transfers return one structured result' {
         $transferText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\src\DbMigration.Transfer.psm1') -Raw
@@ -619,6 +672,13 @@ Describe 'Schema-only configuration validation' {
         Mock Test-DbaPath -ModuleName DbMigration.Discovery {
             throw 'Schema-only migration should not inspect a backup path.'
         }
+        Mock Get-DbaDatabase -ModuleName DbMigration.Discovery {
+            if ($Database -eq 'tempdb') {
+                [pscustomobject]@{ Name = 'tempdb'; Collation = 'Latin1_General_BIN' }
+            } else {
+                [pscustomobject]@{ Name = 'appdb'; Collation = 'Latin1_General_BIN' }
+            }
+        }
         $configuration = @{
             SourceTargets = @(@{
                 Source = 'source'
@@ -633,6 +693,40 @@ Describe 'Schema-only configuration validation' {
         @($results | Where-Object Status -eq 'Failed').Count | Should -Be 0
         @($results | Where-Object { $_.Role -eq 'BackupPath' -and $_.Status -eq 'Skipped' }).Count | Should -Be 1
         Should -Invoke Test-DbaPath -ModuleName DbMigration.Discovery -Exactly 0
+    }
+}
+
+Describe 'Database collation precheck' {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..\src\DbMigration.Discovery.psm1') -Force
+    }
+
+    It 'passes when source database and target tempdb collations match' {
+        $results = @(Get-MigrationCollationPrecheck -Source source -Target target `
+            -SourceDatabases @([pscustomobject]@{ Name = 'appdb'; Collation = 'Latin1_General_BIN' }) `
+            -TargetTempdbCollation 'latin1_general_bin')
+
+        $results[0].Status | Should -Be 'Passed'
+        $results[0].Message | Should -Match 'database collation will be preserved'
+    }
+
+    It 'warns when a source database collation differs from target tempdb' {
+        $results = @(Get-MigrationCollationPrecheck -Source source -Target target `
+            -SourceDatabases @([pscustomobject]@{ Name = 'appdb'; Collation = 'Latin1_General_BIN' }) `
+            -TargetTempdbCollation 'SQL_Latin1_General_CP1_CI_AS')
+
+        $results[0].Status | Should -Be 'Warning'
+        $results[0].Message | Should -Match 'temp-table or table-variable comparisons'
+        $results[0].Database | Should -Be 'appdb'
+    }
+
+    It 'warns rather than assuming compatibility when a collation cannot be read' {
+        $results = @(Get-MigrationCollationPrecheck -Source source -Target target `
+            -SourceDatabases @([pscustomobject]@{ Name = 'appdb'; Collation = '' }) `
+            -TargetTempdbCollation 'SQL_Latin1_General_CP1_CI_AS')
+
+        $results[0].Status | Should -Be 'Warning'
+        $results[0].Message | Should -Match 'could not be verified'
     }
 }
 
@@ -867,13 +961,114 @@ Describe 'Schema-only transfer result handling' {
     }
 }
 
+Describe 'Offline migration advisor' {
+    It 'builds local action plans for readiness findings and exports schema-only consequences' {
+        $uiText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\web\index.html') -Raw
+        $uiText | Should -Match 'function buildOfflineMigrationPlan'
+        $uiText | Should -Match 'Resolve blockers'
+        $uiText | Should -Match 'CDC capture configuration and history are omitted'
+        $uiText | Should -Match 'Users without matching target logins are skipped'
+        $uiText | Should -Match 'no AI service or internet access is used'
+        $uiText | Should -Match 'Download offline action plan \(JSON\)'
+        $uiText | Should -Match 'assessMigrationLaunch'
+        $uiText | Should -Match 'Approve warnings'
+        $webHostText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Invoke-DbMigrationWeb.ps1') -Raw
+        $webHostText | Should -Match 'Get-WebMigrationReadinessDecision'
+        $webHostText | Should -Match 'ReadinessWarningsApproved'
+        $webHostText | Should -Match 'Get-MigrationReadinessAssessment'
+        $webHostText | Should -Match 'Warnings require explicit approval'
+    }
+}
+
+Describe 'Fail-closed migration readiness decision' {
+    BeforeAll {
+        $webHostPath = Join-Path $PSScriptRoot '..\Invoke-DbMigrationWeb.ps1'
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($webHostPath, [ref]$tokens, [ref]$parseErrors)
+        $functionAst = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-WebMigrationReadinessDecision'
+        }, $true)
+        if ($parseErrors.Count -gt 0 -or -not $functionAst) {
+            throw 'Could not load the migration readiness decision function for testing.'
+        }
+        . ([scriptblock]::Create($functionAst.Extent.Text))
+    }
+
+    It 'blocks when any selected database is missing an assessment' {
+        $assessment = [pscustomobject]@{
+            Database = 'appdb'; Readiness = 'No blockers detected'
+            Findings = @([pscustomobject]@{ Severity = 'Information'; Status = 'Passed'; Check = 'Connectivity' })
+        }
+
+        { Get-WebMigrationReadinessDecision -Assessments @($assessment) -ExpectedAssessmentCount 2 -WarningsApproved $true } |
+            Should -Throw '*could not verify every selected database*'
+    }
+
+    It 'blocks critical findings even when warnings are approved' {
+        $assessment = [pscustomobject]@{
+            Database = 'appdb'; Readiness = 'Blocked'
+            Findings = @([pscustomobject]@{ Severity = 'Critical'; Status = 'Failed'; Check = 'TDE'; Recommendation = 'Install key.' })
+        }
+
+        { Get-WebMigrationReadinessDecision -Assessments @($assessment) -ExpectedAssessmentCount 1 -WarningsApproved $true } |
+            Should -Throw '*blocked migration*'
+    }
+
+    It 'requires explicit approval for warning-only assessments' {
+        $assessment = [pscustomobject]@{
+            Database = 'appdb'; Readiness = 'Review required'
+            Findings = @([pscustomobject]@{ Severity = 'Warning'; Status = 'Review'; Check = 'CDC'; Recommendation = 'Reconfigure on target.' })
+        }
+
+        { Get-WebMigrationReadinessDecision -Assessments @($assessment) -ExpectedAssessmentCount 1 -WarningsApproved $false } |
+            Should -Throw '*require explicit approval*'
+    }
+
+    It 'passes warning-only assessments only after explicit approval' {
+        $assessment = [pscustomobject]@{
+            Database = 'appdb'; Readiness = 'Review required'
+            Findings = @([pscustomobject]@{ Severity = 'Warning'; Status = 'Review'; Check = 'CDC'; Recommendation = 'Reconfigure on target.' })
+        }
+
+        $decision = Get-WebMigrationReadinessDecision -Assessments @($assessment) -ExpectedAssessmentCount 1 -WarningsApproved $true
+
+        $decision.Decision | Should -Be 'ApprovedWithWarnings'
+        $decision.WarningCount | Should -Be 1
+    }
+
+    It 'blocks an unknown assessment state or severity' {
+        $assessment = [pscustomobject]@{
+            Database = 'appdb'; Readiness = 'Unknown'
+            Findings = @([pscustomobject]@{ Severity = 'Mystery'; Status = 'Unknown'; Check = 'Something' })
+        }
+
+        { Get-WebMigrationReadinessDecision -Assessments @($assessment) -ExpectedAssessmentCount 1 -WarningsApproved $true } |
+            Should -Throw '*incomplete or unknown assessment*'
+    }
+
+    It 'blocks findings whose checks failed or could not be verified' {
+        $assessment = [pscustomobject]@{
+            Database = 'appdb'; Readiness = 'Review required'
+            Findings = @([pscustomobject]@{ Severity = 'Warning'; Status = 'Not verified'; Check = 'Capacity' })
+        }
+
+        { Get-WebMigrationReadinessDecision -Assessments @($assessment) -ExpectedAssessmentCount 1 -WarningsApproved $true } |
+            Should -Throw '*blocked migration*'
+    }
+}
+
 Describe 'Schema-only missing target login option' {
-    It 'defaults off and selectively adds only users whose server login exists on target' {
+    It 'defaults off and filters missing-login users from the explicit SMO object list' {
         $transferText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\src\DbMigration.Transfer.psm1') -Raw
         $transferText | Should -Match 'SkipUsersWithoutTargetLogins = \$false'
         $transferText | Should -Match 'CopyAllUsers'
-        $transferText | Should -Match 'ObjectList\.Add\(\$sourceUser\)'
-        $transferText | Should -Match "'sys', 'dbo', 'guest', 'INFORMATION_SCHEMA'"
+        $transferText | Should -Match 'Get-MigrationSchemaTransferObjectList'
+        $transferText | Should -Match 'EnumObjects\(\)'
+        $transferText | Should -Match 'ExcludedUserUrns'
+        $transferText | Should -Match "@Schema='cdc'"
         $transferText | Should -Match 'Skipped database user\(s\) with missing target logins'
     }
 
@@ -1397,23 +1592,65 @@ Describe 'Full-text migration readiness' {
     }
 }
 
+Describe 'Schema-only transfer object filtering' {
+    It 'excludes CDC artifacts and selected users while retaining ordinary schema objects' {
+        $dboSchemaUrn = "Server[@Name='source']/Database[@Name='appdb']/Schema[@Name='dbo']"
+        $cdcSchemaUrn = "Server[@Name='source']/Database[@Name='appdb']/Schema[@Name='cdc']"
+        $cdcFunctionUrn = "Server[@Name='source']/Database[@Name='appdb']/UserDefinedFunction[@Name='fn_cdc_get_all_changes_table' and @Schema='cdc']"
+        $cdcUserUrn = "Server[@Name='source']/Database[@Name='appdb']/User[@Name='cdc']"
+        $tableUrn = "Server[@Name='source']/Database[@Name='appdb']/Table[@Name='orders' and @Schema='dbo']"
+        $skippedUserUrn = "Server[@Name='source']/Database[@Name='appdb']/User[@Name='orphan']"
+        $objectList = Get-MigrationSchemaTransferObjectList -ObjectUrns @(
+            $dboSchemaUrn, $cdcSchemaUrn, $cdcFunctionUrn, $cdcUserUrn, $tableUrn, $skippedUserUrn
+        ) -ResolveObject { param($urn) [pscustomobject]@{ Urn = $urn.ToString() } } `
+            -ExcludedUserUrns @($skippedUserUrn) -ExcludeCdc
+        $copiedUrns = @($objectList | ForEach-Object Urn)
+
+        $objectList.Count | Should -Be 2
+        $copiedUrns | Should -Contain $dboSchemaUrn
+        $copiedUrns | Should -Contain $tableUrn
+        $copiedUrns | Should -Not -Contain $cdcSchemaUrn
+        $copiedUrns | Should -Not -Contain $cdcFunctionUrn
+        $copiedUrns | Should -Not -Contain $cdcUserUrn
+        $copiedUrns | Should -Not -Contain $skippedUserUrn
+    }
+}
+
 Describe 'CDC schema-only migration readiness' {
     BeforeAll {
         Import-Module dbatools -ErrorAction Stop
     }
 
-    It 'blocks schema-only migration when CDC is enabled' {
+    It 'allows schema-only readiness when CDC is enabled without querying target CDC' {
         Mock Invoke-DbaQuery -ModuleName DbMigration.Transfer {
-            [pscustomobject]@{ IsCdcEnabled = $true }
+            if ($Query -match 'sys.databases') {
+                [pscustomobject]@{ IsCdcEnabled = $true }
+            }
+            else {
+                [pscustomobject]@{
+                    source_schema = 'dbo'
+                    source_table = 'AAD_ARCHIVE'
+                    capture_instance = 'dbo_AAD_ARCHIVE'
+                    supports_net_changes = $true
+                    role_name = 'cdc_reader'
+                    index_name = 'IX_AAD_ARCHIVE'
+                    captured_column_list = '[ArchiveId], [ChangedAt]'
+                    filegroup_name = 'PRIMARY'
+                    partition_switch = $false
+                }
+            }
         }
 
         $result = Test-MigrationCdcReadiness -Source source -Target target -Database appdb
 
-        $result.Status | Should -Be 'Failed'
+        $result.Status | Should -Be 'Passed'
         $result.Stage | Should -Be 'CdcPreflight'
         $result.SourceCdcEnabled | Should -BeTrue
-        $result.Message | Should -Match 'configure CDC separately'
-        $result.Message | Should -Match 'No target database changes were made'
+        $result.Message | Should -Match 'will not copy CDC configuration or history'
+        $result.Message | Should -Match 'source remains unchanged'
+        Should -Invoke Invoke-DbaQuery -ModuleName DbMigration.Transfer -Times 1 -ParameterFilter {
+            $SqlInstance.ComputerName -eq 'source' -and $Database -eq 'master' -and $Query -match '^\s*SELECT'
+        }
     }
 
     It 'allows schema-only migration when CDC is disabled' {
@@ -1541,6 +1778,24 @@ param([string] $HostName, [int] $Port, [switch] $PortableMode, [string] $AppRoot
                 ) -join "`n"
             }
             catch {
+                $output = $_.Exception.Message
+            }
+            $output | Should -Match 'Could not find a free loopback port near 65535'
+        }
+        finally {
+            $blockingListener.Stop()
+            $env:DBMIGRATION_NO_ELEVATE = $previousNoElevate
+        }
+    }
+
+    It 'preserves portable authentication and logs during installation' {
+        $installRoot = Join-Path $TestDrive 'ExistingDbMigrationTool'
+        $portableAuthPath = Join-Path $installRoot 'portable\auth\auth.json'
+        $portableLogPath = Join-Path $installRoot 'portable\logs\existing.log'
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $portableAuthPath) -Force
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $portableLogPath) -Force
+        Set-Content -LiteralPath $portableAuthPath -Value 'preserve-existing-auth'
+        Set-Content -LiteralPath $portableLogPath -Value 'preserve-existing-log'
 
         & (Join-Path $PSScriptRoot '..\Install-DbMigrationWeb.ps1') -CurrentUser -InstallPath $installRoot -NoDesktopShortcut -NoStartMenuShortcut
 
@@ -1605,6 +1860,13 @@ Describe 'Pair endpoint validation' {
             [pscustomobject]@{ SqlInstance = $SqlInstance; VersionMajor = $majorVersion }
         }
         Mock Test-DbaPath -ModuleName DbMigration.Discovery { $true }
+        Mock Get-DbaDatabase -ModuleName DbMigration.Discovery {
+            if ($Database -eq 'tempdb') {
+                [pscustomobject]@{ Name = 'tempdb'; Collation = 'SQL_Latin1_General_CP1_CI_AS' }
+            } else {
+                [pscustomobject]@{ Name = 'appdb'; Collation = 'Latin1_General_BIN' }
+            }
+        }
         $configuration = @{
             SourceTargets = @(@{
                 Source = '192.168.1.20\SQL2019'
@@ -1618,6 +1880,7 @@ Describe 'Pair endpoint validation' {
 
         @($results | Where-Object { $_.Role -in @('Source', 'Target') -and $_.Status -eq 'Passed' }).Count | Should -Be 2
         @($results | Where-Object { $_.Role -eq 'BackupPath' -and $_.Status -eq 'Passed' }).Count | Should -Be 1
+        @($results | Where-Object { $_.Role -eq 'Collation' -and $_.Status -eq 'Warning' }).Count | Should -Be 1
         $script:validatedSqlInstances | Should -Contain '192.168.1.20\SQL2019'
         $script:validatedSqlInstances | Should -Contain 'SQLTARGET\SQL2022'
         Should -Invoke Connect-DbaInstance -ModuleName DbMigration.Discovery -Times 2 -Exactly

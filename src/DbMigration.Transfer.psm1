@@ -1,5 +1,25 @@
 Set-StrictMode -Version Latest
 
+function Assert-MigrationDatabaseCollation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Source,
+        [Parameter(Mandatory)][string] $Target,
+        [Parameter(Mandatory)][string] $Database,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $SourceCollation,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $TargetCollation
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SourceCollation) -or [string]::IsNullOrWhiteSpace($TargetCollation)) {
+        throw "Could not verify database collation for '$Database' from '$Source' to '$Target'."
+    }
+    if (-not [string]::Equals($SourceCollation, $TargetCollation, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Database collation mismatch for '$Database' from '$Source' to '$Target': source is '$SourceCollation', target is '$TargetCollation'."
+    }
+
+    [pscustomobject]@{ Database = $Database; Collation = $TargetCollation }
+}
+
 function Invoke-MigrationSafeRestore {
     [CmdletBinding()]
     param(
@@ -87,13 +107,35 @@ WHERE name = N'$escapedDatabase';
         Target = $Target
         Database = $Database
         Stage = 'CdcPreflight'
-        Status = 'Passed'; SourceCdcEnabled = $cdcEnabled
+        Status = 'Passed'
+        SourceCdcEnabled = $cdcEnabled
         Message = if ($cdcEnabled) {
             'Source CDC is enabled. Schema-only migration will not copy CDC configuration or history; the source remains unchanged.'
         } else {
             'Source database does not have Change Data Capture enabled.'
         }
     }
+}
+
+function Get-MigrationSchemaTransferObjectList {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]] $ObjectUrns,
+        [Parameter(Mandatory)][scriptblock] $ResolveObject,
+        [Parameter()][string[]] $ExcludedUserUrns = @(),
+        [Parameter()][switch] $ExcludeCdc
+    )
+
+    $excludedUsers = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($userUrn in $ExcludedUserUrns) { $null = $excludedUsers.Add([string]$userUrn) }
+    $objectList = [System.Collections.ArrayList]::new()
+    foreach ($objectUrn in $ObjectUrns) {
+        $urnText = $objectUrn.ToString()
+        if ($ExcludeCdc -and $urnText -match "/Schema\[@Name='cdc'\]|@Schema='cdc'|/User\[@Name='cdc'\]") { continue }
+        if ($excludedUsers.Contains($urnText)) { continue }
+        $objectList.Add((& $ResolveObject $objectUrn)) | Out-Null
+    }
+    return ,$objectList
 }
 
 function Test-MigrationFullTextReadiness {
@@ -348,6 +390,7 @@ function Invoke-DatabaseMigration {
             SourceDatabase = $sourceDatabase
             TargetDatabase = $targetDatabaseName
             TargetCompatibilityLevel = $targetCompatibilityLevel
+            SourceCollation = [string]$_.Collation
         }
     })
     if ($databasePlans.Count -eq 0) {
@@ -364,6 +407,7 @@ function Invoke-DatabaseMigration {
         $database = $_.SourceDatabase
         $targetDatabase = $_.TargetDatabase
         $targetCompatibilityLevel = $_.TargetCompatibilityLevel
+        $sourceCollation = [string]$_.SourceCollation
         $statePath = $using:StatePath
         $runBackupDirectory = $using:Pair.BackupPath
         $destinationDataDirectory = $using:DestinationDataDirectory
@@ -485,9 +529,15 @@ function Invoke-DatabaseMigration {
             if (-not (Test-MigrationDatabaseExists -SqlInstance $target -Database $targetDatabase)) {
                 throw "Restore completed without making database '$targetDatabase' visible on target '$target'."
             }
+            $restoredDatabase = Get-DbaDatabase -SqlInstance $target -Database $targetDatabase -EnableException -ErrorAction Stop |
+                Select-Object -First 1
+            $collationVerification = Assert-MigrationDatabaseCollation -Source $source -Target $target `
+                -Database $database -SourceCollation $sourceCollation `
+                -TargetCollation $(if ($restoredDatabase) { [string]$restoredDatabase.Collation } else { '' })
             Set-MigrationState -Path $statePath -Source $source -Target $target -Database $database `
                 -TargetDatabase $targetDatabase -Status Completed -BackupPath $backupPath
             $message = if ($completedStateNeedsRepair) { 'Target database was missing; restored from backup.' } else { 'Backup and restore completed.' }
+            $message += " Verified database collation '$($collationVerification.Collation)' matches the source."
             if ($progressPath) {
                 Write-MigrationProgressEvent -ProgressPath $progressPath -Source $source -Target $target `
                     -Database $database -Stage 'Restore' -Status 'Completed' -Message 'Target database is online and accessible.'
@@ -537,6 +587,7 @@ function Invoke-DatabaseSchemaOnlyMigration {
     $destinationServer = $null
     $targetDatabaseCreated = $false
     $skippedUserNames = [System.Collections.Generic.List[string]]::new()
+    $skippedUserUrns = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     if ([string]::IsNullOrWhiteSpace($TargetDatabaseName)) {
         $TargetDatabaseName = $Database
     }
@@ -614,24 +665,23 @@ function Invoke-DatabaseSchemaOnlyMigration {
                 if ([string]::IsNullOrWhiteSpace($loginName)) { $loginName = [string]$sourceUser.Name }
                 if ($loginName -and -not $targetLoginNames.Contains($loginName)) {
                     $null = $skippedUsers.Add([string]$sourceUser.Name)
+                    $null = $skippedUserUrns.Add($sourceUser.Urn.ToString())
                 }
             }
             foreach ($skippedUser in $skippedUsers) { $skippedUserNames.Add($skippedUser) }
-            if ($skippedUserNames.Count -gt 0) {
-                $transfer.CopyAllObjects = $false
-                foreach ($copyProperty in $transfer.GetType().GetProperties([Reflection.BindingFlags]'Public,Instance') |
-                    Where-Object { $_.Name -like 'CopyAll*' -and $_.PropertyType -eq [bool] }) {
-                    $copyPropertyName = $copyProperty.Name
-                    $transfer.$copyPropertyName = $copyPropertyName -notin @('CopyAllObjects', 'CopyAllUsers', 'CopyAllLogins')
-                }
-                $transfer.ObjectList = [System.Collections.ArrayList]::new()
-                foreach ($sourceUser in $sourceDatabase.Users) {
-                    if ([string]$sourceUser.Name -notin @('sys', 'dbo', 'guest', 'INFORMATION_SCHEMA') -and
-                        -not $skippedUsers.Contains([string]$sourceUser.Name)) {
-                        $null = $transfer.ObjectList.Add($sourceUser)
-                    }
-                }
+        }
+        if ($cdcReadiness.SourceCdcEnabled -or $skippedUserUrns.Count -gt 0) {
+            $transferObjectList = Get-MigrationSchemaTransferObjectList `
+                -ObjectUrns @($transfer.EnumObjects()) `
+                -ResolveObject { param($urn) $sourceServer.GetSmoObject($urn) } `
+                -ExcludedUserUrns @($skippedUserUrns) `
+                -ExcludeCdc:$cdcReadiness.SourceCdcEnabled
+            $transfer.CopyAllObjects = $false
+            foreach ($copyProperty in $transfer.GetType().GetProperties([Reflection.BindingFlags]'Public,Instance') |
+                Where-Object { $_.Name -like 'CopyAll*' -and $_.PropertyType -eq [bool] }) {
+                $transfer.$($copyProperty.Name) = $false
             }
+            $transfer.ObjectList = $transferObjectList
         }
         $null = $transfer.ScriptTransfer()
         $scriptMessage = if ($skippedUserNames.Count -gt 0) {
@@ -682,6 +732,9 @@ function Invoke-DatabaseSchemaOnlyMigration {
         if (-not $targetDatabase -or $targetDatabase.Status -ne 'Normal') {
             throw "Schema transfer did not leave '$TargetDatabaseName' online and accessible on '$($Pair.Target)'."
         }
+        $collationVerification = Assert-MigrationDatabaseCollation -Source $Pair.Source -Target $Pair.Target `
+            -Database $TargetDatabaseName -SourceCollation ([string]$sourceDatabase.Collation) `
+            -TargetCollation ([string]$targetDatabase.Collation)
         $verification = Invoke-DbaQuery -SqlInstance $destinationServer -Database $TargetDatabaseName `
             -Query @'
 SELECT COALESCE(SUM(CONVERT(bigint, p.rows)), 0) AS UserTableRows
@@ -695,7 +748,7 @@ WHERE p.index_id IN (0, 1);
         $objectCount = Invoke-DbaQuery -SqlInstance $destinationServer -Database $TargetDatabaseName `
             -Query "SELECT COUNT_BIG(*) AS SchemaObjectCount FROM sys.objects WHERE is_ms_shipped = 0;" `
             -EnableException -ErrorAction Stop | Select-Object -Last 1
-        $message = "Schema-only transfer completed; copied schema objects without table data. Verified $($objectCount.SchemaObjectCount) user objects and zero user-table rows.$cdcSummary"
+        $message = "Schema-only transfer completed; copied schema objects without table data. Verified collation '$($collationVerification.Collation)', $($objectCount.SchemaObjectCount) user objects, and zero user-table rows.$cdcSummary"
         if ($skippedUserNames.Count -gt 0) {
             $message += " Skipped database user(s) with missing target logins: $($skippedUserNames -join ', ')."
         }
@@ -737,4 +790,4 @@ WHERE p.index_id IN (0, 1);
     }
 }
 
-Export-ModuleMember -Function Invoke-MigrationSafeRestore, Test-MigrationCdcReadiness, Test-MigrationFullTextReadiness, Invoke-MigrationTrackedDatabaseOperation, Invoke-DatabaseMigration, Invoke-DatabaseSchemaOnlyMigration
+Export-ModuleMember -Function Assert-MigrationDatabaseCollation, Invoke-MigrationSafeRestore, Test-MigrationCdcReadiness, Get-MigrationSchemaTransferObjectList, Test-MigrationFullTextReadiness, Invoke-MigrationTrackedDatabaseOperation, Invoke-DatabaseMigration, Invoke-DatabaseSchemaOnlyMigration

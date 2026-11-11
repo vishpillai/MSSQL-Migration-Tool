@@ -1061,10 +1061,74 @@ function ConvertTo-WebPairs {
     return $validatedPairs.ToArray()
 }
 
+function Get-WebMigrationReadinessDecision {
+    [CmdletBinding()]
+    param(
+        [Parameter()][AllowEmptyCollection()][object[]] $Assessments = @(),
+        [Parameter(Mandatory)][ValidateRange(0, 1000)][int] $ExpectedAssessmentCount,
+        [Parameter(Mandatory)][bool] $WarningsApproved
+    )
+
+    if ($Assessments.Count -ne $ExpectedAssessmentCount) {
+        throw [System.InvalidOperationException]::new("Readiness gate could not verify every selected database ($($Assessments.Count) of $ExpectedAssessmentCount assessed). Migration was blocked.")
+    }
+
+    $blockers = [System.Collections.Generic.List[string]]::new()
+    $warnings = [System.Collections.Generic.List[string]]::new()
+    foreach ($assessment in $Assessments) {
+        if ($null -eq $assessment -or
+            $assessment.PSObject.Properties.Name -notcontains 'Database' -or
+            $assessment.PSObject.Properties.Name -notcontains 'Readiness' -or
+            $assessment.PSObject.Properties.Name -notcontains 'Findings' -or
+            [string]$assessment.Readiness -notin @('Blocked', 'Review required', 'No blockers detected') -or
+            @($assessment.Findings).Count -eq 0) {
+            throw [System.InvalidOperationException]::new('Readiness gate received an incomplete or unknown assessment result. Migration was blocked.')
+        }
+
+        $databaseName = [string]$assessment.Database
+        if ($assessment.Readiness -eq 'Blocked') { $blockers.Add("${databaseName}: critical readiness result") }
+        foreach ($finding in @($assessment.Findings)) {
+            if ($null -eq $finding -or
+                $finding.PSObject.Properties.Name -notcontains 'Status' -or
+                [string]$finding.Severity -notin @('Critical', 'Warning', 'Information') -or
+                [string]::IsNullOrWhiteSpace([string]$finding.Status)) {
+                throw [System.InvalidOperationException]::new("Readiness gate found an unknown severity for '$databaseName'. Migration was blocked.")
+            }
+            $findingText = "${databaseName}: $([string]$finding.Check)"
+            if ($finding.Severity -eq 'Critical' -or [string]$finding.Status -in @('Failed', 'Not verified', 'Unknown', 'Unavailable', 'Error')) {
+                $blockers.Add($findingText)
+            }
+            elseif ($finding.Severity -eq 'Warning') {
+                $warnings.Add($findingText)
+            }
+        }
+        if ($assessment.Readiness -eq 'Review required' -and @($assessment.Findings | Where-Object Severity -eq 'Warning').Count -eq 0) {
+            $warnings.Add("${databaseName}: unresolved review status")
+        }
+    }
+
+    if ($blockers.Count -gt 0) {
+        $summary = @($blockers | Select-Object -Unique | Select-Object -First 8) -join '; '
+        throw [System.InvalidOperationException]::new("Readiness gate blocked migration. Resolve critical findings and reassess: $summary")
+    }
+    if ($warnings.Count -gt 0 -and -not $WarningsApproved) {
+        $summary = @($warnings | Select-Object -Unique | Select-Object -First 8) -join '; '
+        throw [System.InvalidOperationException]::new("Readiness warnings require explicit approval. Review and approve the warnings before starting: $summary")
+    }
+
+    [pscustomobject]@{
+        Decision = if ($warnings.Count -gt 0) { 'ApprovedWithWarnings' } else { 'Ready' }
+        AssessmentCount = $Assessments.Count
+        WarningCount = @($warnings | Select-Object -Unique).Count
+        WarningsApproved = $WarningsApproved
+    }
+}
+
 function Start-WebMigrationPlan {
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary] $Body,
-        [Parameter()][string] $Actor = ''
+        [Parameter()][string] $Actor = '',
+        [Parameter()][System.Security.Principal.WindowsIdentity] $WindowsIdentity
     )
 
     if (($script:MigrationProcess -and -not $script:MigrationProcess.HasExited) -or
@@ -1087,6 +1151,9 @@ function Start-WebMigrationPlan {
         if (-not $Body.Options.Contains($optionName) -or $Body.Options[$optionName] -isnot [bool]) {
             throw [ArgumentException]::new("'$optionName' must be provided as a JSON boolean.")
         }
+    }
+    if (-not $Body.Contains('ReadinessWarningsApproved') -or $Body.ReadinessWarningsApproved -isnot [bool]) {
+        throw [ArgumentException]::new('ReadinessWarningsApproved must be provided as a JSON boolean.')
     }
     $configureLinkedServers = [bool]$Body.Options.ConfigureLinkedServers -and -not [bool]$Body.Options.SkipLinkedServers
     $linkedServerSecrets = [System.Collections.Generic.List[object]]::new()
@@ -1244,6 +1311,44 @@ function Start-WebMigrationPlan {
     if ($planPairs.Count -eq 0) {
         throw [ArgumentException]::new('Select at least one database or server-level action for a configured pair.')
     }
+
+    $expectedAssessmentCount = [int](@($planPairs | ForEach-Object { $_.Databases.Count } | Measure-Object -Sum).Sum)
+    $readinessAssessments = [System.Collections.Generic.List[object]]::new()
+    if ($expectedAssessmentCount -gt 0) {
+        $bufferPercent = if ($script:WebConfiguration.Contains('RestoreSpaceBufferPercent')) {
+            [double]$script:WebConfiguration.RestoreSpaceBufferPercent
+        } else { 20 }
+        foreach ($pairPlan in $planPairs) {
+            $databaseNames = @($pairPlan.Databases | ForEach-Object { [string]$_.Database })
+            for ($offset = 0; $offset -lt $databaseNames.Count; $offset += 100) {
+                $databaseBatch = @($databaseNames | Select-Object -Skip $offset -First 100)
+                $assessmentPair = $pairPlan
+                $assessmentBatch = @(Invoke-MigrationWebImpersonated -Identity $WindowsIdentity -ScriptBlock {
+                    Get-MigrationReadinessAssessment -Source $assessmentPair.Source -Target $assessmentPair.Target `
+                        -Databases $databaseBatch -MigrationMode $assessmentPair.MigrationMode -BufferPercent $bufferPercent
+                })
+                foreach ($assessment in $assessmentBatch) { $readinessAssessments.Add($assessment) }
+            }
+        }
+    }
+    try {
+        $readinessDecision = Get-WebMigrationReadinessDecision -Assessments $readinessAssessments.ToArray() `
+            -ExpectedAssessmentCount $expectedAssessmentCount -WarningsApproved ([bool]$Body.ReadinessWarningsApproved)
+    }
+    catch {
+        Write-WebAuditRecord -Action 'Migration launch denied by readiness gate' -Actor $Actor -Outcome 'Denied' -Details @{
+            DatabaseCount = $expectedAssessmentCount
+            WarningsApproved = [bool]$Body.ReadinessWarningsApproved
+            Reason = $_.Exception.Message
+        }
+        throw
+    }
+    Write-WebAuditRecord -Action 'Migration readiness gate passed' -Actor $Actor `
+        -Outcome $readinessDecision.Decision -Details @{
+            DatabaseCount = $readinessDecision.AssessmentCount
+            WarningCount = $readinessDecision.WarningCount
+            WarningsApproved = $readinessDecision.WarningsApproved
+        }
 
     $configuration = $script:WebConfiguration.Clone()
     foreach ($property in @('OutputPath', 'LinkedServersCsv')) {
@@ -2233,12 +2338,14 @@ ORDER BY s.name;
                     Test-MigrationConfiguration -Configuration $validationConfiguration
                 })
                 $failedValidationCount = @($validation | Where-Object Status -eq 'Failed').Count
+                $warningValidationCount = @($validation | Where-Object Status -eq 'Warning').Count
                 Write-WebAuditRecord -Action 'Migration pair validated' -Actor $session.Username `
-                    -Outcome $(if ($failedValidationCount -eq 0) { 'Succeeded' } else { 'Failed' }) -Details @{
+                    -Outcome $(if ($failedValidationCount -gt 0) { 'Failed' } elseif ($warningValidationCount -gt 0) { 'PartiallyFailed' } else { 'Succeeded' }) -Details @{
                         Source = $pair.Source
                         Target = $pair.Target
                         PassedCount = @($validation | Where-Object Status -eq 'Passed').Count
                         FailedCount = $failedValidationCount
+                        WarningCount = $warningValidationCount
                         SkippedCount = @($validation | Where-Object Status -eq 'Skipped').Count
                     }
                 Send-WebJson -Response $response -StatusCode 200 -Value @{
@@ -2248,6 +2355,7 @@ ORDER BY s.name;
                     validation = $validation
                     passedCount = @($validation | Where-Object Status -eq 'Passed').Count
                     failedCount = @($validation | Where-Object Status -eq 'Failed').Count
+                    warningCount = $warningValidationCount
                     skippedCount = @($validation | Where-Object Status -eq 'Skipped').Count
                     validatedAt = [DateTime]::UtcNow.ToString('o')
                 }
@@ -3043,7 +3151,7 @@ ORDER BY volumes.volume_mount_point;
             if ($request.HttpMethod -eq 'POST' -and $request.Url.AbsolutePath -eq '/api/migrate') {
                 $body = Read-WebRequestJson -Request $request
                 try {
-                    $result = Start-WebMigrationPlan -Body $body -Actor $session.Username
+                    $result = Start-WebMigrationPlan -Body $body -Actor $session.Username -WindowsIdentity $requestWindowsIdentity
                     Send-WebJson -Response $response -StatusCode 202 -Value $result
                 }
                 catch [System.InvalidOperationException] {

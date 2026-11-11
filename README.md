@@ -70,7 +70,13 @@ Run the script from the project directory (or provide absolute paths):
 
 Standalone CLI runs write structured JSONL logs to `%LOCALAPPDATA%\DbMigration\logs` by default; pass `-LogPath <path>` to choose another file. GUI migrations write the same structured records alongside their existing readable log. Web migrations continue using the web host's existing run logs. Records contain timestamps, run mode, migration progress, endpoints, database names, outcomes, and error messages; they do not capture passwords or custom SQL text. Restrict access to log folders according to your operational privacy policy.
 
+Readiness assessment also creates a deterministic offline migration action plan from its findings and selected migration mode. It is generated locally without an AI service or internet access, identifies blockers before execution, and can be downloaded as JSON. It is advisory only and does not change source or target servers.
+
+Every web migration start reruns readiness checks on the server before creating a run or target-side work. Critical, failed, unverified, incomplete, or unknown checks block launch. Warnings require explicit operator approval in the UI and are independently reassessed by the server. These controls reduce risk but cannot guarantee zero failures; review the plan and maintain tested backups and rollback procedures.
+
 Schema-only migration leaves the source unchanged and copies schema without CDC capture configuration or change history. The target does not begin CDC capture; configure CDC separately on the target only if needed.
+
+Database collation is preserved: schema-only creates the target database with the source database collation, and full backup/restore retains it. Both paths verify source and target database collations before reporting success. This does not change the target server or `tempdb` collation; readiness reports any relevant mismatch for operator review.
 
 For an interactive Windows desktop interface, run:
 
