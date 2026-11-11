@@ -660,6 +660,106 @@
       .app-navigation a { padding: 8px 5px; font-size: 12px; }
       #migration-monitor { margin-top: 12px; }
     }
+    :root {
+      --canvas: #edf1ed; --surface: #fff; --surface-subtle: #f5f7f4; --line: #d6ded7;
+      --text-primary: #1d2b24; --text-muted: #5e6e64; --success: #247449; --success-bg: #e8f4ec;
+      --warning: #8a5c08; --warning-bg: #fff3d8; --danger: #a43c36; --danger-bg: #fff0ed;
+      --info-bg: #e8f1ee; color: var(--text-primary);
+      font-family: "Aptos", "Segoe UI Variable", "Segoe UI", sans-serif; background: var(--canvas);
+    }
+    html[data-theme="Dark"] {
+      --canvas: #141d19; --surface: #1d2923; --surface-subtle: #24332b; --line: #3a4b41;
+      --text-primary: #e7eee9; --text-muted: #b1c0b7; --success-bg: #1d3b2b;
+      --warning-bg: #443817; --danger-bg: #482622; --info-bg: #263a35;
+    }
+    html[data-theme="Blue"] {
+      --canvas: #eaf0f3; --surface: #fbfdfe; --surface-subtle: #eff4f6; --line: #ccd9dd;
+      --text-primary: #21343a; --text-muted: #5a7075; --info-bg: #e8f1f3;
+    }
+    body { color: var(--text-primary); background: var(--canvas); }
+    body.application-active { display: grid; grid-template-columns: 244px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; min-height: 100vh; min-height: 100dvh; align-items: stretch; }
+    body.application-active > header {
+      position: sticky; inset: 0 auto auto 0; grid-column: 1; grid-row: 1 / 3; display: flex;
+      width: 244px; height: 100vh; height: 100dvh; min-height: 0; flex-direction: column;
+      align-items: stretch; justify-content: flex-start; gap: 24px; padding: 22px 14px 14px;
+      border: 0; border-right: 1px solid #34463d; background: #192a23; box-shadow: none;
+    }
+    header h1::before { content: none; }
+    body.application-active .brand { min-width: 0; align-items: center; gap: 9px; }
+    body.application-active .brand h1 { color: #f3f6f3; font-size: 15px; line-height: 1.25; overflow-wrap: anywhere; }
+    body.application-active .header-context { color: #b5c4ba; }
+    body.application-active #brand-logo { flex: 0 0 auto; max-width: 46px; max-height: 38px; margin: 0; }
+    body.application-active .app-navigation { order: 0; display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; align-items: stretch; gap: 5px; overflow-x: hidden; overflow-y: auto; padding: 0; }
+    body.application-active .app-navigation a { min-height: 42px; flex: 0 0 auto; display: flex; align-items: center; padding: 9px 11px; border: 1px solid transparent; border-radius: 6px; color: #c3d0c8; text-align: left; font-size: 13px; }
+    body.application-active .app-navigation a:hover, body.application-active .app-navigation a:focus-visible { color: #fff; background: #263a31; outline: 2px solid #8cc6a5; outline-offset: 1px; }
+    body.application-active .app-navigation a[aria-current="page"] { color: #f3fff7; border-color: #476d56; background: #2b4938; box-shadow: inset 3px 0 #a6d68d; font-weight: 700; }
+    body.application-active .header-actions { display: flex; flex: 0 0 auto; flex-direction: column; align-items: stretch; gap: 9px; padding-top: 12px; border-top: 1px solid #34463d; }
+    body.application-active #current-user { margin: 0; overflow-wrap: anywhere; font-size: 12px; }
+    body.application-active #logout { width: 100%; justify-content: center; }
+    body.application-active > #workspace-main { grid-column: 2; grid-row: 1; width: 100%; max-width: none; min-height: 0; padding: 26px clamp(18px, 2.4vw, 36px); overflow: auto; }
+    body.application-active > footer { grid-column: 2; grid-row: 2; padding: 10px clamp(18px, 2.4vw, 36px); border-top: 1px solid var(--line); background: var(--surface); color: var(--text-muted); }
+    #application { width: 100%; max-width: 1480px; margin: 0 auto; gap: 18px; }
+    #application > section.card { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+    #application > section > h2 { margin: 0 0 16px; padding: 0 0 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--text-primary); font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif; font-size: 22px; }
+    .card { border-color: var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 1px 2px #17251d0a; }
+    h3, h4 { color: var(--text-primary); }
+    .muted, .header-context { color: var(--text-muted); }
+    body.application-active .muted { line-height: 1.5; }
+    label { color: var(--text-primary); font-size: 12px; font-weight: 650; }
+    input[type="text"], input[type="password"], input[type="search"], input[type="date"], select, textarea { min-height: 38px; padding: 8px 10px; border: 1px solid #b9c8be; border-radius: 5px; color: var(--text-primary); background: var(--surface); }
+    input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid #5b9c7d; outline-offset: 2px; }
+    button { min-height: 38px; padding: 8px 13px; border: 1px solid #28694f; border-radius: 5px; background: #28694f; box-shadow: none; font-weight: 650; }
+    button:hover:not(:disabled) { background: #20583f; box-shadow: none; }
+    button.secondary { border-color: var(--line); background: var(--surface); color: var(--text-primary); }
+    button.secondary:hover:not(:disabled) { background: var(--surface-subtle); }
+    .pair-card, .patch-panel, .custom-sql-export-toolbar, .custom-sql-result-set, .live-monitor-card, .disk-server-card, .monitor-stage-card, .monitor-current-card, .monitor-metric, .patch-metric, .live-monitor-metric, .live-monitor-trend { border-color: var(--line); border-radius: 6px; background: var(--surface); box-shadow: none; }
+    .pair-card { padding: 13px; border-left: 3px solid var(--accent); }
+    #options.options { gap: 8px; padding: 12px; border-color: var(--line); border-radius: 6px; background: var(--surface-subtle); }
+    #options.options > .check { min-height: 42px; padding: 9px 10px; border-color: var(--line); border-radius: 5px; background: var(--surface); }
+    #options.options > .check:has(input:checked) { border-color: var(--accent); color: var(--text-primary); background: var(--info-bg); }
+    .migration-setup-disclosure > summary, .patch-panel summary { padding: 13px 15px; border: 1px solid var(--line); border-radius: 6px; color: var(--text-primary); background: var(--surface); font-size: 14px; }
+    #migration-setup-content, .patch-content { padding: 16px; }
+    #migration-monitor { margin-top: 18px; padding: 16px; border-color: var(--line); border-radius: 6px; background: var(--surface); }
+    #migration-monitor h2 { margin: -16px -16px 14px; padding: 12px 16px; border-radius: 6px 6px 0 0; color: var(--text-primary); background: var(--surface-subtle); }
+    .monitor-stage-card, .monitor-current-card { padding: 12px; }
+    .monitor-metric { border-top: 1px solid var(--line) !important; padding: 11px; }
+    .status-line { padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .pill { border-color: var(--line); border-radius: 999px; background: var(--surface-subtle); color: var(--text-primary); }
+    .table-wrap { border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+    th { color: var(--text-primary); background: var(--surface-subtle); }
+    tbody tr:nth-child(even) td { background: var(--surface-subtle); }
+    tbody tr:hover td { background: var(--info-bg); }
+    .error:not(:empty) { border-color: #e3b5ae; border-radius: 5px; color: var(--danger); background: var(--danger-bg); }
+    #events { border-color: var(--line); border-radius: 5px; background: #17241e; color: #e1ebe4; }
+    @media (max-width: 980px) {
+      body.application-active { display: flex; min-height: 100vh; min-height: 100dvh; }
+      body.application-active > header { position: sticky; z-index: 20; inset: 0 auto auto; display: flex; width: 100%; height: auto; min-height: 58px; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 9px 14px 0; border-right: 0; border-bottom: 1px solid #34463d; }
+      body.application-active .brand { flex: 1 1 180px; }
+      body.application-active .app-navigation { order: 3; flex: 1 1 100%; width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; flex-direction: row; gap: 4px; overflow-x: auto; padding-bottom: 8px; }
+      body.application-active .app-navigation a { min-height: 38px; flex: 0 0 auto; padding: 8px 10px; }
+      body.application-active .header-actions { flex-direction: row; align-items: center; gap: 8px; padding: 0; border: 0; }
+      body.application-active > #workspace-main { flex: 1; min-height: 0; padding: 18px 14px; }
+      body.application-active > footer { padding: 9px 14px; }
+      body.application-active #current-user { display: none; }
+      .monitor-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 620px) {
+      body.application-active > header { gap: 6px 8px; padding: 8px 9px 0; }
+      body.application-active .brand h1 { font-size: 14px; }
+      body.application-active .app-navigation a { min-height: 36px; padding: 7px 8px; font-size: 12px; }
+      body.application-active > #workspace-main { padding: 14px 10px; }
+      #application > section > h2 { font-size: 19px; }
+      #migration-setup-content, .patch-content { padding: 12px; }
+      .monitor-dashboard { grid-template-columns: minmax(0, 1fr); }
+      .monitor-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .row { align-items: stretch; }
+      .row > button { max-width: 100%; }
+      #login-card { display: block; max-width: 480px; margin: 18px auto; }
+      .login-visual { min-height: 220px; padding: 22px; }
+      .login-visual > svg { overflow: hidden; }
+      #login-form { padding: 20px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
   </style>
 </head>
 <body>
@@ -758,8 +858,6 @@
         <input id="password" type="password" autocomplete="current-password" required>
         <label class="check" style="margin-top:12px"><input id="remember-username" type="checkbox"> Remember username on this device</label>
         <div class="muted">Only the username is saved in this browser. Your password and sign-in session are not saved by this option.</div>
-        <label class="check"><input id="remember-credentials" type="checkbox"> Save username and password on this device</label>
-        <div class="muted">The saved password is kept in this browser's local storage and is readable by anyone using this browser profile. Do not use on shared computers.</div>
         <button style="margin-top:16px;width:100%">Sign in</button>
         <div id="login-error" class="error" role="alert"></div>
       </form>
@@ -1166,18 +1264,9 @@
     const migrationSetupStateKey = "dbMigrationSetupExpanded.v1";
     const patchPanelStateKey = "dbMigrationPatchExpanded.v1";
     const rememberedUsernameKey = "dbMigrationRememberedUsername.v1";
-    const savedPasswordKey = "dbMigrationSavedPassword.v1";
+    const legacySavedPasswordKey = "dbMigrationSavedPassword.v1";
     let currentSession = null;
     let currentBranding = null;
-
-    // UTF-8-safe base64 for locally saved sign-in passwords. Obfuscation only, not encryption.
-    function encodeSavedPassword(value) {
-      return btoa(String.fromCharCode(...new TextEncoder().encode(String(value))));
-    }
-
-    function decodeSavedPassword(value) {
-      return new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)));
-    }
 
     function loadHistory() {
       try {
@@ -2091,6 +2180,7 @@
       const windowsAuth = authMode === "Windows";
       if (authenticated !== applicationAuthenticated) resetTransientSessionUi();
       applicationAuthenticated = authenticated;
+      document.body.classList.toggle("application-active", authenticated);
       configureSessionAccess(authenticated ? { ...(session || {}), authMode, username } : null);
       $("login-card").classList.toggle("hidden", authenticated || windowsAuth);
       $("application").classList.toggle("hidden", !authenticated);
@@ -3980,13 +4070,10 @@
         });
         $("first-run-setup-form").reset();
         try {
-          if ($("remember-credentials").checked) {
-            localStorage.setItem(rememberedUsernameKey, username);
-            localStorage.setItem(savedPasswordKey, encodeSavedPassword(password));
-            $("remember-username").checked = true;
-          } else if ($("remember-username").checked) {
+          if ($("remember-username").checked) {
             localStorage.setItem(rememberedUsernameKey, username);
           }
+          localStorage.removeItem(legacySavedPasswordKey);
         } catch (_) {}
         firstRunSetupRequired = false;
         showApplication(session.authenticated, "Application", session.username, session);
@@ -4568,14 +4655,9 @@
         const username = $("username").value.trim();
         const session = await api("/api/login", { Username: username, Password: $("password").value });
         try {
-          if ($("remember-credentials").checked) {
-            localStorage.setItem(rememberedUsernameKey, username);
-            localStorage.setItem(savedPasswordKey, encodeSavedPassword($("password").value));
-          } else {
-            localStorage.removeItem(savedPasswordKey);
-            if ($("remember-username").checked) localStorage.setItem(rememberedUsernameKey, username);
-            else localStorage.removeItem(rememberedUsernameKey);
-          }
+          if ($("remember-username").checked) localStorage.setItem(rememberedUsernameKey, username);
+          else localStorage.removeItem(rememberedUsernameKey);
+          localStorage.removeItem(legacySavedPasswordKey);
         } catch (error) {
           $("login-error").textContent = `Signed in, but the username could not be saved: ${error.message}`;
         }
@@ -4592,28 +4674,15 @@
         $("username").value = rememberedUsername;
         $("remember-username").checked = true;
       }
-      const savedPassword = localStorage.getItem(savedPasswordKey);
-      if (rememberedUsername && savedPassword) {
-        $("password").value = decodeSavedPassword(savedPassword);
-        $("remember-credentials").checked = true;
-      }
+      localStorage.removeItem(legacySavedPasswordKey);
     } catch (_) {}
 
     $("remember-username").addEventListener("change", () => {
       if (!$("remember-username").checked) {
-        $("remember-credentials").checked = false;
         try {
           localStorage.removeItem(rememberedUsernameKey);
-          localStorage.removeItem(savedPasswordKey);
+          localStorage.removeItem(legacySavedPasswordKey);
         } catch (_) {}
-      }
-    });
-
-    $("remember-credentials").addEventListener("change", () => {
-      if ($("remember-credentials").checked) {
-        $("remember-username").checked = true;
-      } else {
-        try { localStorage.removeItem(savedPasswordKey); } catch (_) {}
       }
     });
 
