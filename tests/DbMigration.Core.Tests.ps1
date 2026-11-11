@@ -886,6 +886,26 @@ Describe 'Web patch target resolution' {
         { Assert-WebInstanceNotConfiguredSource -SqlInstance 'target-sql\NODE1' } |
             Should -Not -Throw
     }
+
+    It 'normalizes bracketed and IPv4-mapped loopback SQL endpoints' {
+        $localHostIdentity = Get-WebSqlHostIdentity -SqlInstance $env:COMPUTERNAME
+        (Get-WebSqlHostIdentity -SqlInstance '[::1],1433') | Should -Be $localHostIdentity
+        (Get-WebSqlHostIdentity -SqlInstance '[::ffff:127.0.0.1],1433') | Should -Be $localHostIdentity
+        (Get-WebSqlHostIdentity -SqlInstance '10.1.2.3,1433') | Should -Be '10.1.2.3'
+        (Get-WebSqlHostIdentity -SqlInstance '10.9.8.7,1433') | Should -Be '10.9.8.7'
+
+        $originalSourceTargets = $script:WebConfiguration.SourceTargets
+        try {
+            $script:WebConfiguration.SourceTargets = @(@{ Source = 'localhost\NODE1'; Target = 'target' })
+            { Assert-WebInstanceNotConfiguredSource -SqlInstance '[::1],1433' } |
+                Should -Throw '*must remain unchanged*'
+            { Assert-WebInstanceNotConfiguredSource -SqlInstance '[::ffff:127.0.0.1],1433' } |
+                Should -Throw '*must remain unchanged*'
+        }
+        finally {
+            $script:WebConfiguration.SourceTargets = $originalSourceTargets
+        }
+    }
 }
 
 Describe 'Web host script safeguards' {

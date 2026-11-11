@@ -829,9 +829,24 @@ function Get-WebPair {
 function Get-WebSqlHostIdentity {
     param([Parameter(Mandatory)][string] $SqlInstance)
 
-    $hostName = ($SqlInstance.Trim() -split '[\\,]', 2)[0].Trim().TrimEnd('.')
-    if ($hostName -in @('.', '(local)', 'localhost', '127.0.0.1', '::1')) {
+    $endpoint = $SqlInstance.Trim()
+    if ($endpoint.StartsWith('[') -and $endpoint.Contains(']')) {
+        $hostName = $endpoint.Substring(1, $endpoint.IndexOf(']') - 1)
+    }
+    else {
+        $hostName = ($endpoint -split '[\\,]', 2)[0].Trim()
+    }
+    $hostName = $hostName.Trim().TrimEnd('.')
+    if ($hostName -in @('.', '(local)', 'localhost')) {
         $hostName = $env:COMPUTERNAME
+    }
+    else {
+        $address = $null
+        if ([System.Net.IPAddress]::TryParse($hostName, [ref]$address)) {
+            if ($address.IsIPv4MappedToIPv6) { $address = $address.MapToIPv4() }
+            if ([System.Net.IPAddress]::IsLoopback($address)) { $hostName = $env:COMPUTERNAME }
+            else { return $address.ToString().ToLowerInvariant() }
+        }
     }
     ($hostName -split '\.', 2)[0].ToLowerInvariant()
 }
@@ -1575,8 +1590,9 @@ function Start-WebSqlServerPatch {
                 throw [System.InvalidOperationException]::new("Patching configured source '$($target.SqlInstance)' is blocked; source servers must remain unchanged.")
             }
             Assert-WebInstanceNotConfiguredSource -SqlInstance ([string]$target.SqlInstance)
-            $instanceHost = ([string]$target.SqlInstance -split '[\\,]')[0].Trim().ToLowerInvariant()
-            $isLocalTarget = $instanceHost -in @('localhost', '.', '(local)', '127.0.0.1', '::1', $env:COMPUTERNAME.ToLowerInvariant())
+            $localHostIdentity = Get-WebSqlHostIdentity -SqlInstance $env:COMPUTERNAME
+            $targetHostIdentity = Get-WebSqlHostIdentity -SqlInstance ([string]$target.SqlInstance)
+            $isLocalTarget = [string]::Equals($targetHostIdentity, $localHostIdentity, [StringComparison]::OrdinalIgnoreCase)
             if ($isLocalTarget -and -not (Test-WebHostElevated)) {
                 throw [System.InvalidOperationException]::new("Patching '$($target.SqlInstance)' needs administrator rights on this machine. Close the app and start it again with 'Run as administrator' (or accept the UAC prompt when launching), then retry.")
             }
