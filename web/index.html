@@ -1552,15 +1552,60 @@
     const liveMonitorDiskCounters = new Map();
     const outcomes = new Map();
 
+    const retryableReadPostPaths = new Set([
+      "/api/linked-servers",
+      "/api/validate-pair",
+      "/api/readiness-assessment",
+      "/api/discover",
+      "/api/discover-instance",
+      "/api/patch/levels",
+      "/api/patch/assess",
+      "/api/disk-usage",
+      "/api/live-monitor"
+    ]);
+
+    function getSafeApiRetryCount(path, method) {
+      const requestPath = path.split("?", 1)[0];
+      return method === "GET" || (method === "POST" && retryableReadPostPaths.has(requestPath)) ? 2 : 0;
+    }
+
+    async function waitBeforeSafeApiRetry(attempt) {
+      const delay = 250 * (2 ** attempt) + Math.floor(Math.random() * 100);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
     async function api(path, body, signal, method = body === undefined ? "GET" : "POST") {
-      const response = await fetch(path, {
+      const retryCount = getSafeApiRetryCount(path, method);
+      const requestOptions = {
         method,
         headers: body === undefined ? {} : { "Content-Type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
         credentials: "same-origin",
         cache: "no-store",
         signal
-      });
+      };
+      let response;
+      let attempt = 0;
+      while (true) {
+        try {
+          response = await fetch(path, requestOptions);
+        } catch (error) {
+          if (attempt >= retryCount || signal?.aborted || error.name === "AbortError") {
+            if (retryCount > 0 && attempt > 0 && !signal?.aborted && error.name !== "AbortError") {
+              throw new Error(`Read-only request could not reach the app host after ${attempt} automatic retries: ${error.message}. No migration, patch, or SQL mutation was repeated.`);
+            }
+            throw error;
+          }
+          await waitBeforeSafeApiRetry(attempt++);
+          continue;
+        }
+        if (attempt < retryCount && [502, 503, 504].includes(response.status)) {
+          try { await response.body?.cancel(); } catch (_) {}
+          await waitBeforeSafeApiRetry(attempt++);
+          continue;
+        }
+        break;
+      }
       const responseText = await response.text();
       let payload = null;
       if (responseText) {
@@ -1583,7 +1628,11 @@
         if (response.status === 404 && path === "/api/readiness-assessment") {
           throw new Error("The running web host does not include readiness assessment. Update the installed app files, fully stop and restart the web host, then refresh this page.");
         }
-        throw new Error(payload?.error || `Request failed (${response.status})`);
+        const errorMessage = payload?.error || `Request failed (${response.status})`;
+        if (retryCount > 0 && [502, 503, 504].includes(response.status)) {
+          throw new Error(`${errorMessage} The read-only request was retried ${attempt} times; no migration, patch, or SQL mutation was repeated.`);
+        }
+        throw new Error(errorMessage);
       }
       return payload;
     }
